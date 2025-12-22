@@ -5,7 +5,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional
 import QuantLib as ql
 
 
@@ -97,13 +97,21 @@ def get_historical_volatility(ticker_symbols: List[str], as_of, window=30):
     return vols
 
 class CBOEOptionsData:
-    def __init__(self, path: str, date: str, symbols = []):
+    def __init__(self, path: Optional[str] = None, date: str = "", symbols = [], default_vol: float = 0.25, use_remote_vol: bool = False, dataframe: Optional[pl.DataFrame] = None):
         self.path = path
         self.date = date
         self.symbols = symbols
+        self.default_vol = default_vol
+        self.use_remote_vol = use_remote_vol
+        self.dataframe = dataframe
     
     def _load_data(self) -> pl.DataFrame:
-        df = pl.read_csv(self.path)
+        if self.dataframe is not None:
+            df = self.dataframe
+        else:
+            if not self.path:
+                raise ValueError("A CSV path or DataFrame is required to load option data")
+            df = pl.read_csv(self.path)
         if self.symbols:
             df = df.filter(pl.col("underlying_symbol").is_in(self.symbols))
         return df
@@ -181,8 +189,15 @@ class CBOEOptionsData:
     
     def _get_vols(self, df: pl.DataFrame) -> dict:
         ticker_symbols = df.select(pl.col("Ticker")).unique().to_series().to_list()
-        vols = get_historical_volatility(ticker_symbols, self.date, window=30)
-        return vols
+        if not self.use_remote_vol:
+            return {sym: self.default_vol for sym in ticker_symbols}
+
+        try:
+            vols = get_historical_volatility(ticker_symbols, self.date, window=30)
+            return vols
+        except Exception:
+            # Network or data fetch failures fall back to static vol so the UI remains usable.
+            return {sym: self.default_vol for sym in ticker_symbols}
     
     def get_data(self) -> pl.DataFrame:
         df = self._load_data()
