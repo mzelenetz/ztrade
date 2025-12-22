@@ -1,0 +1,265 @@
+from mzpricer import option_greeks, option_price, StockPrice, TimeDuration, OptionType
+import pandas as pd 
+import polars as pl
+import yfinance as yf
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from typing import List
+import QuantLib as ql
+
+
+cols = [
+    "Ticker",            # e.g., AAPL
+    "ValuationTime",     # ISO8601, e.g., 2025-09-11T15:30:00
+    "Spot",              # Underlying spot price S
+    "Type",              # 'C' for call, 'P' for put
+    "Strike",            # K
+    "Expiry",            # ISO date or datetime for option expiration
+    "Rate",              # risk-free cont. comp. rate r (annualized, decimal)
+    "DividendYield",     # continuous dividend yield q (annualized, decimal)
+    "Vol30d",            # annualized vol sigma (decimal, e.g., 0.25)
+    "ContractMultiplier",# usually 100
+    "Bid",               # market bid
+    "Ask",               # market ask
+    "Mid"                # market mid you will compare to fair
+]
+
+
+
+def ql_black_scholes_price_and_delta(S, K, r, q, sigma, valuation_dt, expiry_dt, is_call):
+
+    """
+    Returns (price, delta).
+    """
+    day_counter = ql.Actual365Fixed()
+
+    # Set evaluation date
+    ql.Settings.instance().evaluationDate = valuation_dt
+
+    spot = ql.QuoteHandle(ql.SimpleQuote(S))
+
+    rf   = ql.YieldTermStructureHandle(
+                ql.FlatForward(valuation_dt, r, day_counter))
+    div  = ql.YieldTermStructureHandle(
+                ql.FlatForward(valuation_dt, q, day_counter))
+    vol  = ql.BlackVolTermStructureHandle(
+                ql.BlackConstantVol(valuation_dt, ql.NullCalendar(), sigma, day_counter))
+
+    payoff = ql.PlainVanillaPayoff(ql.Option.Call if is_call else ql.Option.Put, K)
+    exercise = ql.EuropeanExercise(expiry_dt)
+
+    process = ql.BlackScholesMertonProcess(spot, div, rf, vol)
+    option  = ql.VanillaOption(payoff, exercise)
+    option.setPricingEngine(ql.AnalyticEuropeanEngine(process))
+
+    return option.NPV(), option.delta()
+
+
+def get_price_series(df, ticker_symbol, prefer_adj=True):
+    """
+    Return the price series (Adj Close preferred) for ONE symbol.
+    """
+    if isinstance(df.columns, pd.MultiIndex):
+        cols = df.columns
+        if prefer_adj and ('Adj Close', ticker_symbol) in cols:
+            return df[('Adj Close', ticker_symbol)].rename(ticker_symbol)
+        if ('Close', ticker_symbol) in cols:
+            return df[('Close', ticker_symbol)].rename(ticker_symbol)
+    else:
+        # Single-symbol DF
+        if prefer_adj and 'Adj Close' in df.columns:
+            return df['Adj Close']
+        if 'Close' in df.columns:
+            return df['Close']
+
+    raise KeyError(f"Could not find price columns for {ticker_symbol}")
+
+def get_historical_volatility(ticker_symbols: List[str], as_of, window=30):
+    as_of_dt = pd.to_datetime(as_of)
+    start_date = as_of_dt - timedelta(days=window * 2) # buffer to ensure enough data
+    df = yf.download(ticker_symbols, start=start_date, end=as_of_dt)
+    # Storage
+    vols = {}
+
+    for sym in ticker_symbols:
+        prices = get_price_series(df, sym, prefer_adj=True)
+
+        # returns
+        returns = prices.pct_change()
+
+        # 30-day rolling vol, annualized
+        trading_days = 252
+        vol_series = returns.rolling(window).std() * np.sqrt(trading_days)
+
+        vols[sym] = float(vol_series.iloc[-1])
+
+    return vols
+
+class CBOEOptionsData:
+    def __init__(self, path: str, date: str, symbols = []):
+        self.path = path
+        self.date = date
+        self.symbols = symbols
+    
+    def _load_data(self) -> pl.DataFrame:
+        df = pl.read_csv(self.path)
+        if self.symbols:
+            df = df.filter(pl.col("underlying_symbol").is_in(self.symbols))
+        return df
+    
+    def _prep_data(self, df: pl.DataFrame) -> pl.DataFrame:
+        # At the end of this step you'll have
+        cols = [
+            "Ticker",            # e.g., AAPL
+            "ValuationTime",     # ISO8601, e.g., 2025-09-11T15:30:00
+            "Spot",              # Underlying spot price S
+            "Type",              # 'C' for call, 'P' for put
+            "Strike",            # K
+            "Expiry",            # ISO date or datetime for option expiration
+            "Rate",              # risk-free cont. comp. rate r (annualized, decimal)
+            "DividendYield",     # continuous dividend yield q (annualized, decimal)
+            "ContractMultiplier",# usually 100
+            "Bid",               # market bid
+            "Ask",               # market ask
+            "Mid",                # market mid you will compare to fair
+            "Last",               # CLose price of the option
+        ]
+
+
+        df = (df.with_columns(
+                pl.datetime(
+                    year=2023,
+                    month=8,
+                    day=23,
+                    hour=16,
+                    minute=0,
+                    second=0,
+                    time_zone="America/New_York",
+            ).alias("ValuationTime"),
+            ((pl.col("underlying_ask_1545") + pl.col("underlying_bid_1545"))/2).alias("underlying_mid_1545"),
+            (
+                pl.col("expiration").str.to_datetime(format="%Y-%m-%d", time_zone="America/New_York") + pl.duration(hours=16)
+            ),#.dt.to_string("iso"),
+            pl.lit(100).alias('ContractMultiplier'),
+            pl.lit(.05).alias("temp_borrow_rate"),
+            pl.lit(0.0).alias("temp_div"),
+            ((pl.col('ask_1545') + pl.col('bid_1545'))/2).alias('mid_1545')
+            )
+            .rename({
+                "underlying_symbol": "Ticker", 
+                "underlying_mid_1545": "Spot",             
+                "option_type": "Type",             
+                "strike": "Strike",           
+                "expiration": "Expiry",           
+                "temp_borrow_rate": "Rate",             
+                "temp_div": "DividendYield",    
+                "ContractMultiplier": "ContractMultiplier",
+                "bid_1545": "Bid",              
+                "ask_1545": "Ask",              
+                "mid_1545": "Mid",
+                "close": "Last",             
+            })
+            .filter(pl.col("Spot") > 0)
+            .select(cols)
+        )
+        return df
+    
+    def _add_vols(self, df: pl.DataFrame, vols: dict) -> pl.DataFrame:
+        df = df.with_columns(
+            pl.col("Ticker").replace(vols).cast(pl.Float64).alias("Vol30d")
+        )
+        return df
+    
+    def _add_durations(self, df: pl.DataFrame) -> pl.DataFrame:
+        df = df.with_columns(
+            (
+                (pl.col("Expiry").dt.timestamp() - pl.col("ValuationTime").dt.timestamp()) / (365.0 * 24 * 3600)
+            ).alias("T")
+        )
+        return df
+    
+    def _get_vols(self, df: pl.DataFrame) -> dict:
+        ticker_symbols = df.select(pl.col("Ticker")).unique().to_series().to_list()
+        vols = get_historical_volatility(ticker_symbols, self.date, window=30)
+        return vols
+    
+    def get_data(self) -> pl.DataFrame:
+        df = self._load_data()
+        df = self._prep_data(df)
+        vols = self._get_vols(df)
+        df = self._add_vols(df, vols)
+        df = self._add_durations(df)
+        return df
+    
+
+class OptionsPrices:
+    def __init__(self, input_df: pl.DataFrame):
+        self.input_data = input_df
+
+    @staticmethod
+    def to_ql_date(py_date):
+        return ql.Date(py_date.day, py_date.month, py_date.year)
+
+    def price_options(self) -> pl.DataFrame:
+        S      = self.input_data["Spot"].to_list()
+        K      = self.input_data["Strike"].to_list()
+        r      = self.input_data["Rate"].to_list()
+        sigma  = self.input_data["Vol30d"].to_list()
+        q      = self.input_data["DividendYield"].to_list()
+        types  = self.input_data["Type"].to_list()
+
+        # Convert timestamps → Python dates
+        valuation_times = (
+            self.input_data["ValuationTime"]
+            .to_pandas()
+            .dt.tz_localize(None)
+            .dt.date
+            .tolist()
+        )
+
+        expiry_times = (
+            self.input_data["Expiry"]
+            .to_pandas()
+            .dt.tz_localize(None)
+            .dt.date
+            .tolist()
+        )
+
+        # Convert to QuantLib Dates
+        ql_valuation_dates = [OptionsPrices.to_ql_date(d) for d in valuation_times]
+        ql_expiry_dates    = [OptionsPrices.to_ql_date(d) for d in expiry_times]
+
+        prices = []
+        deltas = []
+
+        for i, (s, k, rr, qq, vol, opt_type, vdt, edt) in enumerate(zip(S, K, r, q, sigma, types, ql_valuation_dates, ql_expiry_dates)):
+
+            is_call = (opt_type == "C")
+
+            p, d = ql_black_scholes_price_and_delta(
+                S=s, K=k, r=rr, q=qq, sigma=vol,
+                valuation_dt=vdt,
+                expiry_dt=edt,
+                is_call=is_call
+            )
+            prices.append(p)
+            deltas.append(d)
+
+        out = self.input_data.with_columns(
+            pl.Series("FMV", prices),
+            pl.Series("Delta", deltas)
+        )
+
+        out = out.with_columns(
+            (pl.col("Last") / pl.col("FMV") - 1).alias("%Overvalued")
+        )
+
+        return out
+
+    
+    def calls_puts_split(self, prices: pl.DataFrame) -> (pl.DataFrame, pl.DataFrame):
+        calls_df = prices.filter(pl.col("Type") == 'C')
+        puts_df = prices.filter(pl.col("Type") == 'P')
+        return calls_df, puts_df
+    
