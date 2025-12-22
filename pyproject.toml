@@ -23,3 +23,7 @@ dependencies = [
     "streamlit>=1.50.0",
     "yfinance>=0.2.66",
 ]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
