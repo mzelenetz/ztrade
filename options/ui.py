@@ -34,13 +34,9 @@ def load_data() -> pl.DataFrame:
     )
 
     df_opts = loader.get_data()
-    return df_opts
-
-
-@st.cache_data
-def price_with_model(df_opts: pl.DataFrame, model: str) -> pl.DataFrame:
-    prices = OptionsPrices(df_opts, model=model)
-    return prices.price_options()
+    prices = OptionsPrices(df_opts)
+    df = prices.price_options()
+    return df
 
 
 def login_gate(user_repo: UserRepository) -> bool:
@@ -79,22 +75,20 @@ def bid_ask(df: pl.DataFrame) -> pl.DataFrame:
 def render_expiry_block(sdf: pl.DataFrame, metric_choice: str, call_delta_range: tuple[int, int]):
     sdf = compute_overvalued(sdf, metric_choice)
 
-    calls = (
-        bid_ask(sdf.filter(pl.col("Type") == "C"))
-        .with_columns(pl.col("Delta").abs().alias("CallDelta"))
+    sdf = (
+        sdf.with_columns(
+            pl.when(pl.col("Type") == "C")
+            .then(pl.col("Delta"))
+            .otherwise(-pl.col("Delta")).alias("CallDelta")
+        )
         .filter(
             (pl.col("CallDelta") >= call_delta_range[0] / 100)
             & (pl.col("CallDelta") <= call_delta_range[1] / 100)
         )
-        .sort("Strike")
     )
 
-    eligible_strikes = calls.select("Strike")
-    puts = (
-        bid_ask(sdf.filter(pl.col("Type") == "P"))
-        .join(eligible_strikes, on="Strike", how="inner")
-        .sort("Strike")
-    )
+    calls = bid_ask(sdf.filter(pl.col("Type") == "C")).sort("Strike")
+    puts = bid_ask(sdf.filter(pl.col("Type") == "P")).sort("Strike")
 
     calls_display = calls.select(
         [
@@ -140,18 +134,7 @@ def main():
         st.info("Please log in to view the option chain.")
         st.stop()
 
-    df_opts = load_data()
-
-    pricing_model_label = st.sidebar.radio(
-        "Pricing model",
-        ["MZPricer (default)", "QuantLib"],
-        index=0,
-        help="Choose the engine used to price options and compute deltas.",
-    )
-
-    model_key = "mzpricer" if pricing_model_label.startswith("MZPricer") else "quantlib"
-
-    df = price_with_model(df_opts, model_key)
+    df = load_data()
 
     ticker = st.sidebar.selectbox("Ticker", df["Ticker"].unique().to_list())
     metric_choice = st.sidebar.selectbox(

@@ -6,8 +6,11 @@ A Streamlit dashboard for reviewing option chains with paired call/put views, si
 - Authenticated access with environment-configurable users (default `admin` / `demo123`).
 - Side-by-side call/put data shown on a single line per strike for each expiry.
 - Data-loading abstraction supporting local CSVs, Amazon S3, or Google Cloud Storage.
+<<<<<<< HEAD
 - Toggle between mzpricer (default) and QuantLib pricing models from the sidebar.
 - Filter expiries by an adjustable call-delta band to focus on desired moneyness.
+=======
+>>>>>>> master
 - Dockerfile for repeatable cloud deployments.
 
 ## Getting Started
