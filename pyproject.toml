@@ -15,6 +15,7 @@ dependencies = [
     "matplotlib>=3.10.3",
     "numpy>=2.3.1",
     "pandas>=2.3.2",
+    "mzpricer>=0.1.10",
     "polars>=1.31.0",
     "polygon-api-client>=1.15.4",
     "pyarrow>=21.0.0",
@@ -23,3 +24,7 @@ dependencies = [
     "streamlit>=1.50.0",
     "yfinance>=0.2.66",
 ]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
