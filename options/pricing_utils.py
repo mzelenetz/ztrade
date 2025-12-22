@@ -5,7 +5,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional
 import QuantLib as ql
 
 
@@ -97,13 +97,21 @@ def get_historical_volatility(ticker_symbols: List[str], as_of, window=30):
     return vols
 
 class CBOEOptionsData:
-    def __init__(self, path: str, date: str, symbols = []):
+    def __init__(self, path: Optional[str] = None, date: str = "", symbols = [], default_vol: float = 0.25, use_remote_vol: bool = False, dataframe: Optional[pl.DataFrame] = None):
         self.path = path
         self.date = date
         self.symbols = symbols
+        self.default_vol = default_vol
+        self.use_remote_vol = use_remote_vol
+        self.dataframe = dataframe
     
     def _load_data(self) -> pl.DataFrame:
-        df = pl.read_csv(self.path)
+        if self.dataframe is not None:
+            df = self.dataframe
+        else:
+            if not self.path:
+                raise ValueError("A CSV path or DataFrame is required to load option data")
+            df = pl.read_csv(self.path)
         if self.symbols:
             df = df.filter(pl.col("underlying_symbol").is_in(self.symbols))
         return df
@@ -181,8 +189,15 @@ class CBOEOptionsData:
     
     def _get_vols(self, df: pl.DataFrame) -> dict:
         ticker_symbols = df.select(pl.col("Ticker")).unique().to_series().to_list()
-        vols = get_historical_volatility(ticker_symbols, self.date, window=30)
-        return vols
+        if not self.use_remote_vol:
+            return {sym: self.default_vol for sym in ticker_symbols}
+
+        try:
+            vols = get_historical_volatility(ticker_symbols, self.date, window=30)
+            return vols
+        except Exception:
+            # Network or data fetch failures fall back to static vol so the UI remains usable.
+            return {sym: self.default_vol for sym in ticker_symbols}
     
     def get_data(self) -> pl.DataFrame:
         df = self._load_data()
@@ -194,68 +209,117 @@ class CBOEOptionsData:
     
 
 class OptionsPrices:
-    def __init__(self, input_df: pl.DataFrame):
+    def __init__(self, input_df: pl.DataFrame, model: str = "mzpricer"):
         self.input_data = input_df
+        self.model = model
 
     @staticmethod
     def to_ql_date(py_date):
         return ql.Date(py_date.day, py_date.month, py_date.year)
 
-    def price_options(self) -> pl.DataFrame:
-        S      = self.input_data["Spot"].to_list()
-        K      = self.input_data["Strike"].to_list()
-        r      = self.input_data["Rate"].to_list()
-        sigma  = self.input_data["Vol30d"].to_list()
-        q      = self.input_data["DividendYield"].to_list()
-        types  = self.input_data["Type"].to_list()
+    def _common_inputs(self):
+        return {
+            "S": self.input_data["Spot"].to_list(),
+            "K": self.input_data["Strike"].to_list(),
+            "r": self.input_data["Rate"].to_list(),
+            "sigma": self.input_data["Vol30d"].to_list(),
+            "q": self.input_data["DividendYield"].to_list(),
+            "types": self.input_data["Type"].to_list(),
+            "valuation_times": (
+                self.input_data["ValuationTime"].to_pandas().dt.tz_localize(None).dt.date.tolist()
+            ),
+            "expiry_times": (
+                self.input_data["Expiry"].to_pandas().dt.tz_localize(None).dt.date.tolist()
+            ),
+            "tenors": self.input_data["T"].to_list(),
+        }
 
-        # Convert timestamps → Python dates
-        valuation_times = (
-            self.input_data["ValuationTime"]
-            .to_pandas()
-            .dt.tz_localize(None)
-            .dt.date
-            .tolist()
-        )
-
-        expiry_times = (
-            self.input_data["Expiry"]
-            .to_pandas()
-            .dt.tz_localize(None)
-            .dt.date
-            .tolist()
-        )
-
-        # Convert to QuantLib Dates
-        ql_valuation_dates = [OptionsPrices.to_ql_date(d) for d in valuation_times]
-        ql_expiry_dates    = [OptionsPrices.to_ql_date(d) for d in expiry_times]
+    def _price_with_quantlib(self) -> pl.DataFrame:
+        data = self._common_inputs()
+        ql_valuation_dates = [OptionsPrices.to_ql_date(d) for d in data["valuation_times"]]
+        ql_expiry_dates = [OptionsPrices.to_ql_date(d) for d in data["expiry_times"]]
 
         prices = []
         deltas = []
 
-        for i, (s, k, rr, qq, vol, opt_type, vdt, edt) in enumerate(zip(S, K, r, q, sigma, types, ql_valuation_dates, ql_expiry_dates)):
-
-            is_call = (opt_type == "C")
-
+        for s, k, rr, qq, vol, opt_type, vdt, edt in zip(
+            data["S"],
+            data["K"],
+            data["r"],
+            data["q"],
+            data["sigma"],
+            data["types"],
+            ql_valuation_dates,
+            ql_expiry_dates,
+        ):
+            is_call = opt_type == "C"
             p, d = ql_black_scholes_price_and_delta(
-                S=s, K=k, r=rr, q=qq, sigma=vol,
+                S=s,
+                K=k,
+                r=rr,
+                q=qq,
+                sigma=vol,
                 valuation_dt=vdt,
                 expiry_dt=edt,
-                is_call=is_call
+                is_call=is_call,
             )
             prices.append(p)
             deltas.append(d)
 
+        return self._finalize_output(prices, deltas)
+
+    def _price_with_mzpricer(self) -> pl.DataFrame:
+        data = self._common_inputs()
+        tenors = [TimeDuration(t, 365) for t in data["tenors"]]
+        option_types = [OptionType.Call if t == "C" else OptionType.Put for t in data["types"]]
+
+        prices, _ = option_price(
+            data["S"],
+            data["K"],
+            tenors,
+            data["r"],
+            data["sigma"],
+            option_types,
+            500,
+        )
+
+        greeks = option_greeks(
+            data["S"],
+            data["K"],
+            tenors,
+            data["r"],
+            data["sigma"],
+            option_types,
+            500,
+        )
+
+        deltas = None
+        if isinstance(greeks, dict):
+            deltas = greeks.get("delta") or greeks.get("Delta")
+        elif isinstance(greeks, (list, tuple)) and len(greeks) > 0:
+            deltas = greeks[0]
+
+        if deltas is None:
+            deltas = [float("nan")] * len(data["S"])
+
+        return self._finalize_output(prices, deltas)
+
+    def _finalize_output(self, prices, deltas) -> pl.DataFrame:
         out = self.input_data.with_columns(
-            pl.Series("FMV", prices),
-            pl.Series("Delta", deltas)
+            pl.Series("FMV", prices), pl.Series("Delta", deltas)
         )
 
-        out = out.with_columns(
-            (pl.col("Last") / pl.col("FMV") - 1).alias("%Overvalued")
-        )
+        return out.with_columns((pl.col("Last") / pl.col("FMV") - 1).alias("%Overvalued"))
 
-        return out
+    def price_options(self) -> pl.DataFrame:
+        if self.model == "quantlib":
+            return self._price_with_quantlib()
+
+        try:
+            return self._price_with_mzpricer()
+        except Exception:
+            # Fallback to QuantLib if mzpricer is unavailable or errors
+            return self._price_with_quantlib()
 
     
     def calls_puts_split(self, prices: pl.DataFrame) -> (pl.DataFrame, pl.DataFrame):
