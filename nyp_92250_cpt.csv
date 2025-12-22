@@ -1,0 +1,53 @@
+setting,payer_name,plan_name,standard_charge_dollar,methodology
+NYP,1199SEIU Funds,All Commercial Plans,61.0,fee schedule
+NYP,Aetna,Commercial,447.08,percent of total billed charges
+NYP,Anthem Blue Cross and Blue Shield,All Commercial Plans,263.88,fee schedule
+NYP,Cigna Healthcare,All Commercial Plans,343.85,percent of total billed charges
+NYP,EmblemHealth,All Commercial Plans,90.37,fee schedule
+NYP,EmblemHealth,All NYS Essential Plans,37.85,fee schedule
+NYP,Oxford Health Plans,All Commercial Plans,479.96,percent of total billed charges
+NYP,United Healthcare,All Commercial Plans,447.6,percent of total billed charges
+NYP,United Healthcare,nystateofhealth plans,447.6,percent of total billed charges
+NYP,Aetna,Medicare Advantage,152.15,fee schedule
+NYP,Anthem Blue Cross and Blue Shield,Medicare Advantage,143.29,fee schedule
+NYP,Anthem Blue Cross and Blue Shield Healthplus,Medicare Advantage,143.29,fee schedule
+NYP,Cigna Healthcare,Medicare Advantage,147.72,fee schedule
+NYP,EmblemHealth,Medicare Advantage,147.72,fee schedule
+NYP,Fidelis Care,Medicare Advantage,147.72,fee schedule
+NYP,HealthFirst,Medicare Advantage,155.1,fee schedule
+NYP,Oxford Health Plans,Medicare Advantage,155.91,fee schedule
+NYP,United Healthcare,Medicare Advantage,155.91,fee schedule
+NYP,United Healthcare Community Plan,Medicare Advantage,149.2,fee schedule
+NYP,VNS Health,Medicare Advantage,152.15,fee schedule
+NYP,WellCare,Medicare Advantage,152.89,fee schedule
+NYP,Affinity by Molina Healthcare,Medicaid/Child Health Plus,213.05,fee schedule
+NYP,Affinity by Molina Healthcare,All NYS Essential Plans,490.93,fee schedule
+NYP,Amida Care,Medicaid,213.05,fee schedule
+NYP,Anthem Blue Cross and Blue Shield Healthplus,Medicaid,185.26,fee schedule
+NYP,Anthem Blue Cross and Blue Shield Healthplus,Child Health Plus,277.89,fee schedule
+NYP,Anthem Blue Cross and Blue Shield Healthplus,All NYS Essential Plans,416.83,fee schedule
+NYP,Anthem Blue Cross and Blue Shield Healthplus,nystateofhealth plans,463.14,fee schedule
+NYP,EmblemHealth,Medicaid/Child Health Plus,213.05,fee schedule
+NYP,Fidelis Care,Medicaid/Child Health Plus,213.05,fee schedule
+NYP,Fidelis Care,All NYS Essential Plans,463.14,fee schedule
+NYP,Ambetter by Fidelis Care,nystateofhealth plans,463.14,fee schedule
+NYP,HealthFirst,Medicaid/Child Health Plus,198.23,fee schedule
+NYP,HealthFirst,All Essential Plans,642.47,fee schedule
+NYP,HealthFirst,nystateofhealth plans,333.0,fee schedule
+NYP,MVP Health,Medicaid/Child Health Plus,213.05,fee schedule
+NYP,MVP Health,All NYS Essential Plans,416.83,fee schedule
+NYP,Senior Whole Health,Medicaid Advantage,190.19,fee schedule
+NYP,United Healthcare Community Plan,Medicaid,188.97,fee schedule
+NYP,United Healthcare Community Plan,Child Health Plus,471.75,percent of total billed charges
+NYP,United Healthcare Community Plan,All NYS Essential Plans,648.41,fee schedule
+NYP,VNS Health,Medicaid,213.05,fee schedule
+NYP,Beechstreet,All Commercial Plans,252.19,percent of total billed charges
+NYP,Consumer Health Network,All Commercial Plans,252.19,percent of total billed charges
+NYP,CMN Global,All Commercial Plans,252.19,percent of total billed charges
+NYP,Devon,All Commercial Plans,252.19,percent of total billed charges
+NYP,First Health,All Commercial Plans,252.19,percent of total billed charges
+NYP,First Health Coventry,All Commercial Plans,252.19,percent of total billed charges
+NYP,MagnaCare,All Commercial Plans,252.19,percent of total billed charges
+NYP,MultiPlan,All Commercial Plans,252.19,percent of total billed charges
+NYP,QHM,All Commercial Plans,252.19,percent of total billed charges
+NYP,Worldwide,All Commercial Plans,252.19,percent of total billed charges
