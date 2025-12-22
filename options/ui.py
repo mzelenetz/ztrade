@@ -18,7 +18,7 @@ def compute_overvalued(df: pl.DataFrame, metric: str) -> pl.DataFrame:
 
 
 @st.cache_data
-def load_data() -> pl.DataFrame:
+def load_data(pricing_model: str) -> pl.DataFrame:
     source = load_from_env()
     raw_df = source.load()
 
@@ -34,7 +34,7 @@ def load_data() -> pl.DataFrame:
     )
 
     df_opts = loader.get_data()
-    prices = OptionsPrices(df_opts)
+    prices = OptionsPrices(df_opts, model=pricing_model)
     df = prices.price_options()
     return df
 
@@ -134,7 +134,12 @@ def main():
         st.info("Please log in to view the option chain.")
         st.stop()
 
-    df = load_data()
+    st.sidebar.header("Pricing")
+    pricing_model = st.sidebar.selectbox(
+        "Pricing library", ["mzpricer", "quantlib"], index=0, help="Choose which pricing engine to use for valuations."
+    )
+
+    df = load_data(pricing_model)
 
     ticker = st.sidebar.selectbox("Ticker", df["Ticker"].unique().to_list())
     metric_choice = st.sidebar.selectbox(
