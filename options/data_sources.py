@@ -129,7 +129,7 @@ class GCSClosesDataSource:
 @dataclass
 class DataSourceConfig:
     type: str = "local"
-    path: str = "options/data/sample_options.csv"
+    path: str = "src/data/sample_options.csv"
     s3_bucket: Optional[str] = None
     s3_key: Optional[str] = None
     gcs_bucket: Optional[str] = None
