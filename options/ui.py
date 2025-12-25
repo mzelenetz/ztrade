@@ -158,8 +158,8 @@ def build_spreads(
     call_delta_range: tuple[int, int],
     contract_step: int,
     max_contract_ratio: float,
-    min_leg_value: float,
-    max_leg_value: float,
+    min_last_price: float,
+    max_last_price: float,
     max_abs_net_delta: float,
     max_legs_per_side: int,
     max_results: int,
@@ -176,8 +176,13 @@ def build_spreads(
             (pl.col("CallDelta") >= call_delta_range[0] / 100)
             & (pl.col("CallDelta") <= call_delta_range[1] / 100)
         )
-        .with_columns(pl.col(metric_choice).alias("Price"))
-        .filter(pl.col("Price") > 0)
+        .with_columns(pl.col("Last").alias("LastPrice"))
+        .filter(pl.col("LastPrice") > 0)
+    )
+
+    sdf = sdf.filter(
+        (pl.col("LastPrice") >= min_last_price)
+        & (pl.col("LastPrice") <= max_last_price)
     )
 
     if sdf.is_empty():
@@ -215,13 +220,6 @@ def build_spreads(
 
             contract_ratio = max(buy_qty, sell_qty) / min(buy_qty, sell_qty)
             if contract_ratio > max_contract_ratio:
-                continue
-
-            buy_value = float(buy["Price"]) * float(buy["ContractMultiplier"]) * buy_qty
-            sell_value = float(sell["Price"]) * float(sell["ContractMultiplier"]) * sell_qty
-            if not (min_leg_value <= buy_value <= max_leg_value):
-                continue
-            if not (min_leg_value <= sell_value <= max_leg_value):
                 continue
 
             net_delta = buy_delta * buy_qty - sell_delta * sell_qty
@@ -318,17 +316,17 @@ def main():
         value=3.0,
         step=0.5,
     )
-    min_leg_value = st.sidebar.number_input(
-        "Min leg notional ($)",
+    min_last_price = st.sidebar.number_input(
+        "Min last price ($)",
         min_value=0.0,
-        value=0.0,
-        step=100.0,
+        value=0.1,
+        step=0.05,
     )
-    max_leg_value = st.sidebar.number_input(
-        "Max leg notional ($)",
+    max_last_price = st.sidebar.number_input(
+        "Max last price ($)",
         min_value=0.0,
-        value=200000.0,
-        step=1000.0,
+        value=1000.0,
+        step=1.0,
     )
     max_abs_net_delta = st.sidebar.number_input(
         "Max |net delta|",
@@ -391,8 +389,8 @@ def main():
             (call_delta_min, call_delta_max),
             int(contract_step),
             max_contract_ratio,
-            min_leg_value,
-            max_leg_value,
+            min_last_price,
+            max_last_price,
             max_abs_net_delta,
             int(max_legs_per_side),
             int(max_results),
