@@ -20,7 +20,7 @@ RUN pip install --upgrade pip \
 
 # copy your app
 COPY pyproject.toml README.md ./
-COPY options ./options
+COPY src ./src
 
 # install app deps
 RUN pip install .
@@ -29,7 +29,7 @@ EXPOSE 8080
 
 ENTRYPOINT []
 
-CMD ["sh","-c","streamlit run /app/options/ui.py \
+CMD ["sh","-c","streamlit run /app/src/ui.py \
   --server.address=0.0.0.0 \
   --server.port=$PORT \
   --server.headless=true \

@@ -244,7 +244,6 @@ def build_spreads(
                     "Sell Qty": sell_qty,
                     "Net Delta": net_delta,
                     "Edge": edge,
-                    "Details": f"BUY: {buy_qty} {buy_contract} | SELL: {sell_qty} {sell_contract}",
                     "BuyKey": {
                         "Ticker": buy["Ticker"],
                         "Expiry": buy["Expiry"],
@@ -420,7 +419,7 @@ def main():
                 .with_row_index("Idea")
             )
             selection = st.dataframe(
-                display_df.drop(["Details", "BuyKey", "SellKey"]).to_pandas(),
+                display_df.drop(["BuyKey", "SellKey"]).to_pandas(),
                 use_container_width=True,
                 on_select="rerun",
                 selection_mode="single",
@@ -431,38 +430,45 @@ def main():
                 selected_idx = selected_rows[0]
                 selected_spread = spreads[selected_idx]
 
-                leg_filter = (
-                    (pl.col("Ticker") == selected_spread["BuyKey"]["Ticker"])
-                    & (pl.col("Expiry") == selected_spread["BuyKey"]["Expiry"])
-                    & (pl.col("Strike") == selected_spread["BuyKey"]["Strike"])
-                    & (pl.col("Type") == selected_spread["BuyKey"]["Type"])
-                ) | (
-                    (pl.col("Ticker") == selected_spread["SellKey"]["Ticker"])
-                    & (pl.col("Expiry") == selected_spread["SellKey"]["Expiry"])
-                    & (pl.col("Strike") == selected_spread["SellKey"]["Strike"])
-                    & (pl.col("Type") == selected_spread["SellKey"]["Type"])
-                )
+                def leg_details(leg_key: dict[str, object]) -> pl.DataFrame:
+                    leg_filter = (
+                        (pl.col("Ticker") == leg_key["Ticker"])
+                        & (pl.col("Expiry") == leg_key["Expiry"])
+                        & (pl.col("Strike") == leg_key["Strike"])
+                        & (pl.col("Type") == leg_key["Type"])
+                    )
+                    return df.filter(leg_filter).select(
+                        [
+                            "Ticker",
+                            "Expiry",
+                            "Strike",
+                            "Type",
+                            "Last",
+                            "Bid",
+                            "Ask",
+                            "Mid",
+                            "Delta",
+                            "Gamma",
+                            "Theta",
+                            "Vega",
+                            "Rho",
+                            "FMV",
+                        ]
+                    )
 
-                leg_details = df.filter(leg_filter).select(
-                    [
-                        "Ticker",
-                        "Expiry",
-                        "Strike",
-                        "Type",
-                        "Last",
-                        "Bid",
-                        "Ask",
-                        "Mid",
-                        "Delta",
-                        "Gamma",
-                        "Theta",
-                        "Vega",
-                        "Rho",
-                        "FMV",
-                    ]
-                )
-                st.subheader("Selected Leg Details")
-                st.dataframe(leg_details.to_pandas(), use_container_width=True)
+                leg1, leg2 = st.columns(2)
+                with leg1:
+                    st.subheader("Leg 1 (Buy) – Greeks & Prices")
+                    st.dataframe(
+                        leg_details(selected_spread["BuyKey"]).to_pandas(),
+                        use_container_width=True,
+                    )
+                with leg2:
+                    st.subheader("Leg 2 (Sell) – Greeks & Prices")
+                    st.dataframe(
+                        leg_details(selected_spread["SellKey"]).to_pandas(),
+                        use_container_width=True,
+                    )
 
 
 if __name__ == "__main__":
