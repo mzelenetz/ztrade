@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import io
 import os
+import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional, Protocol
 
 import polars as pl
@@ -68,6 +70,63 @@ class GCSCSVDataSource:
 
 
 @dataclass
+class GCSClosesDataSource:
+    """Loads daily closing data stored as closes-<date>.csv in GCS."""
+
+    bucket: str
+    prefix: str = "closes-"
+    extension: str = ".csv"
+
+    def _client(self):
+        try:
+            from google.cloud import storage
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise ImportError(
+                "google-cloud-storage is required for GCS support. "
+                "Install it with `pip install google-cloud-storage`"
+            ) from exc
+        return storage.Client()
+
+    def _parse_date(self, blob_name: str) -> Optional[datetime.date]:
+        pattern = rf"^{re.escape(self.prefix)}(\d{{4}}-\d{{2}}-\d{{2}}){re.escape(self.extension)}$"
+        match = re.match(pattern, blob_name)
+        if not match:
+            return None
+        return datetime.strptime(match.group(1), "%Y-%m-%d").date()
+
+    def list_available_dates(self) -> list[datetime.date]:
+        client = self._client()
+        bucket = client.bucket(self.bucket)
+        dates = []
+        for blob in client.list_blobs(bucket, prefix=self.prefix):
+            parsed = self._parse_date(blob.name)
+            if parsed:
+                dates.append(parsed)
+        return sorted(dates)
+
+    def latest_date(self) -> datetime.date:
+        dates = self.list_available_dates()
+        if not dates:
+            raise FileNotFoundError(
+                f"No closing files found in gs://{self.bucket} with prefix '{self.prefix}'"
+            )
+        return dates[-1]
+
+    def blob_name_for_date(self, date: datetime.date) -> str:
+        return f"{self.prefix}{date:%Y-%m-%d}{self.extension}"
+
+    def load_for_date(self, date: datetime.date) -> pl.DataFrame:
+        client = self._client()
+        bucket = client.bucket(self.bucket)
+        blob = bucket.blob(self.blob_name_for_date(date))
+        data = blob.download_as_bytes()
+        return pl.read_csv(io.BytesIO(data))
+
+    def load(self) -> pl.DataFrame:
+        return self.load_for_date(self.latest_date())
+
+
+@dataclass
 class DataSourceConfig:
     type: str = "local"
     path: str = "options/data/sample_options.csv"
@@ -91,6 +150,12 @@ def load_from_env() -> DataSource:
         bucket = os.environ["DATA_SOURCE_BUCKET"]
         blob = os.environ["DATA_SOURCE_KEY"]
         return GCSCSVDataSource(bucket=bucket, blob_name=blob)
+
+    if source_type == "gcs_closes":
+        bucket = os.getenv("GCS_CLOSES_BUCKET", "ztrade-yesterday-closes")
+        prefix = os.getenv("GCS_CLOSES_PREFIX", "closes-")
+        extension = os.getenv("GCS_CLOSES_EXTENSION", ".csv")
+        return GCSClosesDataSource(bucket=bucket, prefix=prefix, extension=extension)
 
     path = os.getenv("DATA_SOURCE_PATH", DataSourceConfig().path)
     return LocalCSVDataSource(path=path)

@@ -5,7 +5,7 @@ import polars as pl
 import streamlit as st
 
 from options.auth.users import UserRepository
-from options.data_sources import load_from_env
+from options.data_sources import GCSClosesDataSource, load_from_env
 from options.pricing_utils import CBOEOptionsData, OptionsPrices
 
 st.set_page_config(layout="wide")
@@ -18,9 +18,15 @@ def compute_overvalued(df: pl.DataFrame, metric: str) -> pl.DataFrame:
 
 
 @st.cache_data
-def load_data(pricing_model: str) -> pl.DataFrame:
+def load_data(pricing_model: str, close_date: str | None) -> pl.DataFrame:
     source = load_from_env()
-    raw_df = source.load()
+    if isinstance(source, GCSClosesDataSource):
+        if close_date is None:
+            raw_df = source.load()
+        else:
+            raw_df = source.load_for_date(datetime.strptime(close_date, "%Y-%m-%d").date())
+    else:
+        raw_df = source.load()
 
     as_of = os.getenv("DATA_AS_OF_DATE", datetime.today().strftime("%Y-%m-%d"))
     default_vol = float(os.getenv("DEFAULT_VOLATILITY", "0.25"))
@@ -142,11 +148,35 @@ def main():
         st.info("Please log in to view the option chain.")
         st.stop()
 
+    source = load_from_env()
+    close_date: str | None = None
+    if isinstance(source, GCSClosesDataSource):
+        available_dates = source.list_available_dates()
+        if not available_dates:
+            st.error("No closing files found in the configured GCS bucket.")
+            st.stop()
+        latest_date = available_dates[-1]
+        selected_date = st.sidebar.date_input(
+            "Close date",
+            value=latest_date,
+            min_value=available_dates[0],
+            max_value=latest_date,
+        )
+        if selected_date not in available_dates:
+            st.sidebar.warning(
+                "Selected date is not available. Using the most recent close instead."
+            )
+            selected_date = latest_date
+        close_date = selected_date.strftime("%Y-%m-%d")
+        st.sidebar.caption(
+            f"Available closes: {available_dates[0]:%Y-%m-%d} to {latest_date:%Y-%m-%d}"
+        )
+
     pricing_model = st.sidebar.selectbox(
         "Pricing library", ["mzpricer", "quantlib"], index=0
     )
 
-    df = load_data(pricing_model)
+    df = load_data(pricing_model, close_date)
 
     ticker = st.sidebar.selectbox("Ticker", df["Ticker"].unique().to_list())
     metric_choice = st.sidebar.selectbox(
