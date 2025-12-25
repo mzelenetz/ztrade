@@ -411,27 +411,25 @@ def main():
         if not spreads:
             st.info("No spreads matched the current filters.")
         else:
-            display_df = pl.DataFrame(spreads).with_columns(
-                pl.col("Edge").cast(float).round(4),
-                pl.col("Net Delta").cast(float).round(4),
+            display_df = (
+                pl.DataFrame(spreads)
+                .with_columns(
+                    pl.col("Edge").cast(float).round(4),
+                    pl.col("Net Delta").cast(float).round(4),
+                )
+                .with_row_index("Idea")
             )
-            st.dataframe(
+            selection = st.dataframe(
                 display_df.drop(["Details", "BuyKey", "SellKey"]).to_pandas(),
                 use_container_width=True,
+                on_select="rerun",
+                selection_mode="single",
             )
 
-            spread_choices = {
-                f"Idea {idx + 1}: {row['Buy']} / {row['Sell']}": row["Details"]
-                for idx, row in enumerate(spreads)
-            }
-            selected = st.selectbox(
-                "Select a spread to view construction details",
-                list(spread_choices.keys()),
-            )
-            if selected:
-                selected_idx = list(spread_choices.keys()).index(selected)
+            selected_rows = selection.selection.rows
+            if selected_rows:
+                selected_idx = selected_rows[0]
                 selected_spread = spreads[selected_idx]
-                st.success(selected_spread["Details"])
 
                 leg_filter = (
                     (pl.col("Ticker") == selected_spread["BuyKey"]["Ticker"])
