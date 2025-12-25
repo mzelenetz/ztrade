@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Streamlit",
+      "type": "python",
+      "request": "launch",
+
+      // Run streamlit as a module, not as a script
+      "module": "streamlit",
+
+      // Tell streamlit what to run
+        "args": [
+        "run",
+        "${workspaceFolder}/src/ui.py"
+        ],
+        "cwd": "${workspaceFolder}"
+
+      // Use your project virtualenv
+      "python": "${command:python.interpreterPath}",
+
+      // Makes breakpoints actually stop
+      "justMyCode": true,
+
+      // Streamlit reload code often — this keeps the debugger attached
+      "env": {
+        "PYTHONBREAKPOINT": "ipdb.set_trace"
+      },
+
+      "console": "integratedTerminal"
+    }
+  ]
+}
