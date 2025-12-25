@@ -6,11 +6,8 @@ A Streamlit dashboard for reviewing option chains with paired call/put views, si
 - Authenticated access with environment-configurable users (default `admin` / `demo123`).
 - Side-by-side call/put data shown on a single line per strike for each expiry.
 - Data-loading abstraction supporting local CSVs, Amazon S3, or Google Cloud Storage.
-<<<<<<< HEAD
 - Toggle between mzpricer (default) and QuantLib pricing models from the sidebar.
 - Filter expiries by an adjustable call-delta band to focus on desired moneyness.
-=======
->>>>>>> master
 - Dockerfile for repeatable cloud deployments.
 
 ## Getting Started
@@ -63,3 +60,21 @@ A small CSV at `options/data/sample_options.csv` is included for offline explora
 - Data loading abstractions live in `options/data_sources.py` and option pricing helpers in `options/pricing_utils.py`.
 - User management is in `options/auth/users.py`.
 
+### Cloud deployement
+Build and redeploy and push: 
+```
+docker buildx build \
+  --platform linux/amd64 \
+  -t us-central1-docker.pkg.dev/pcrpal/containers/ztrade:latest \
+  --push .
+```
+
+Push to gcloud:
+```
+gcloud run deploy ztrade \
+  --image us-central1-docker.pkg.dev/pcrpal/containers/ztrade:latest \
+  --region us-central1 \
+  --platform managed \
+  --allow-unauthenticated \
+  --timeout=900
+```

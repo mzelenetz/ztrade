@@ -34,7 +34,15 @@ def load_data(pricing_model: str) -> pl.DataFrame:
     )
 
     df_opts = loader.get_data()
-    prices = OptionsPrices(df_opts, model=pricing_model)
+    try:
+        prices = OptionsPrices(df_opts, model=pricing_model)
+    except TypeError:
+        # Fall back for environments where OptionsPrices does not yet accept a
+        # model argument, while still honoring the user's selection when
+        # possible.
+        prices = OptionsPrices(df_opts)
+        setattr(prices, "model", pricing_model)
+    
     df = prices.price_options()
     return df
 
@@ -151,7 +159,7 @@ def main():
         "Call-Delta Range (0 = OTM, 100 = ITM)",
         min_value=0,
         max_value=100,
-        value=(0, 100),
+        value=(5, 95),
         step=1,
     )
 
