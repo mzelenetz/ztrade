@@ -244,7 +244,6 @@ def build_spreads(
                     "Sell Qty": sell_qty,
                     "Net Delta": net_delta,
                     "Edge": edge,
-                    "Details": f"BUY: {buy_qty} {buy_contract} | SELL: {sell_qty} {sell_contract}",
                     "BuyKey": {
                         "Ticker": buy["Ticker"],
                         "Expiry": buy["Expiry"],
@@ -420,7 +419,7 @@ def main():
                 .with_row_index("Idea")
             )
             selection = st.dataframe(
-                display_df.drop(["Details", "BuyKey", "SellKey"]).to_pandas(),
+                display_df.drop(["BuyKey", "SellKey"]).to_pandas(),
                 use_container_width=True,
                 on_select="rerun",
                 selection_mode="single",
