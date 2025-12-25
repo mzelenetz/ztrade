@@ -139,7 +139,11 @@ class DataSourceConfig:
 def load_from_env() -> DataSource:
     """Build a data source based on environment variables."""
 
-    source_type = os.getenv("DATA_SOURCE_TYPE", "local").lower()
+    source_type = os.getenv("DATA_SOURCE_TYPE")
+    if source_type:
+        source_type = source_type.lower()
+    else:
+        source_type = "local"
 
     if source_type == "s3":
         bucket = os.environ["DATA_SOURCE_BUCKET"]
@@ -158,4 +162,16 @@ def load_from_env() -> DataSource:
         return GCSClosesDataSource(bucket=bucket, prefix=prefix, extension=extension)
 
     path = os.getenv("DATA_SOURCE_PATH", DataSourceConfig().path)
+    if source_type == "local" and not os.path.exists(path):
+        gcs_closes_bucket = os.getenv("GCS_CLOSES_BUCKET")
+        gcs_bucket = os.getenv("DATA_SOURCE_BUCKET")
+        gcs_key = os.getenv("DATA_SOURCE_KEY")
+        if gcs_closes_bucket:
+            prefix = os.getenv("GCS_CLOSES_PREFIX", "closes-")
+            extension = os.getenv("GCS_CLOSES_EXTENSION", ".csv")
+            return GCSClosesDataSource(
+                bucket=gcs_closes_bucket, prefix=prefix, extension=extension
+            )
+        if gcs_bucket and gcs_key:
+            return GCSCSVDataSource(bucket=gcs_bucket, blob_name=gcs_key)
     return LocalCSVDataSource(path=path)
