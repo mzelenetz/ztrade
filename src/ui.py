@@ -135,10 +135,30 @@ def render_expiry_block(sdf: pl.DataFrame, metric_choice: str, call_delta_range)
 
 
 def render_chain(df, metric_choice, call_delta_range):
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stExpander"] {
+            border: 1px solid rgba(49, 51, 63, 0.2);
+            border-radius: 0;
+            margin-bottom: 0;
+        }
+        div[data-testid="stExpander"] > details {
+            padding: 0.25rem 0.5rem;
+        }
+        div[data-testid="stExpander"] summary {
+            font-weight: 600;
+        }
+        div[data-testid="stExpander"] div[data-testid="stExpanderDetails"] {
+            padding: 0.25rem 0.5rem 0.5rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     for (expiry,), sdf in df.sort("Expiry").group_by("Expiry"):
         with st.expander(expiry.strftime("%d-%b-%y"), expanded=True):
             render_expiry_block(sdf, metric_choice, call_delta_range)
-        st.markdown("---")
 
 
 def round_to_step(value: float, step: int) -> int:
