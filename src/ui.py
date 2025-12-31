@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from math import erf, log, sqrt
 
 import polars as pl
 import streamlit as st
@@ -14,6 +15,44 @@ st.set_page_config(layout="wide")
 
 def compute_overvalued(df: pl.DataFrame, metric: str) -> pl.DataFrame:
     return df.with_columns(((pl.col(metric) / pl.col("FMV")) - 1.0).alias("%Overvalued"))
+
+
+def normal_cdf(value: float) -> float:
+    return 0.5 * (1.0 + erf(value / sqrt(2.0)))
+
+
+def add_probabilities(df: pl.DataFrame) -> pl.DataFrame:
+    def prob_itm(row: dict) -> float | None:
+        spot = float(row["Spot"])
+        strike = float(row["Strike"])
+        rate = float(row["Rate"])
+        dividend = float(row["DividendYield"])
+        vol = float(row["Vol30d"])
+        tenor = float(row["T"])
+
+        if spot <= 0 or strike <= 0 or vol <= 0 or tenor <= 0:
+            return None
+
+        d2 = (log(spot / strike) + (rate - dividend - 0.5 * vol**2) * tenor) / (
+            vol * sqrt(tenor)
+        )
+
+        if row["Type"] == "C":
+            return float(normal_cdf(d2))
+
+        return float(normal_cdf(-d2))
+
+    def prob_otm(row: dict) -> float | None:
+        itm = prob_itm(row)
+        if itm is None:
+            return None
+        return 1.0 - itm
+
+    inputs = ["Spot", "Strike", "Rate", "DividendYield", "Vol30d", "T", "Type"]
+    return df.with_columns(
+        pl.struct(inputs).map_elements(prob_itm, return_dtype=pl.Float64).alias("Prob ITM"),
+        pl.struct(inputs).map_elements(prob_otm, return_dtype=pl.Float64).alias("Prob OTM"),
+    )
 
 
 @st.cache_data
@@ -48,7 +87,7 @@ def load_data(pricing_model: str, close_date: str | None) -> pl.DataFrame:
         prices = OptionsPrices(df_opts)
         setattr(prices, "model", pricing_model)
 
-    return prices.price_options()
+    return add_probabilities(prices.price_options())
 
 
 def login_gate(user_repo: UserRepository) -> bool:
@@ -83,7 +122,13 @@ def bid_ask(df: pl.DataFrame) -> pl.DataFrame:
     return df.with_columns((pl.col("Bid").cast(str) + " – " + pl.col("Ask").cast(str)).alias("BidAsk"))
 
 
-def render_expiry_block(sdf: pl.DataFrame, metric_choice: str, call_delta_range):
+def render_expiry_block(
+    sdf: pl.DataFrame,
+    metric_choice: str,
+    call_delta_range,
+    min_option_price: float,
+    greek_columns: list[str],
+):
     sdf = compute_overvalued(sdf, metric_choice)
 
     sdf = (
@@ -96,11 +141,15 @@ def render_expiry_block(sdf: pl.DataFrame, metric_choice: str, call_delta_range)
         .filter(
             (pl.col("CallDelta") >= call_delta_range[0] / 100)
             & (pl.col("CallDelta") <= call_delta_range[1] / 100)
+            & (pl.col("Last") >= min_option_price)
         )
     )
 
     calls = bid_ask(sdf.filter(pl.col("Type") == "C")).sort("Strike")
     puts = bid_ask(sdf.filter(pl.col("Type") == "P")).sort("Strike")
+
+    optional_columns = [col for col in greek_columns if col in sdf.columns]
+    prob_columns = [col for col in ["Prob ITM", "Prob OTM"] if col in sdf.columns]
 
     combined = (
         calls.select(
@@ -109,8 +158,9 @@ def render_expiry_block(sdf: pl.DataFrame, metric_choice: str, call_delta_range)
                 pl.col("FMV").alias("Call FMV"),
                 pl.col("Last").alias("Call Last"),
                 pl.col("BidAsk").alias("Call Bid/Ask"),
-                pl.col("Delta").alias("Call Delta"),
                 pl.col("%Overvalued").alias("Call %Overvalued"),
+                *[pl.col(col).alias(f"Call {col}") for col in optional_columns],
+                *[pl.col(col).cast(pl.Float64).round(4).alias(f"Call {col}") for col in prob_columns],
             ]
         )
         .join(
@@ -120,16 +170,20 @@ def render_expiry_block(sdf: pl.DataFrame, metric_choice: str, call_delta_range)
                     pl.col("FMV").alias("Put FMV"),
                     pl.col("Last").alias("Put Last"),
                     pl.col("BidAsk").alias("Put Bid/Ask"),
-                    pl.col("Delta").alias("Put Delta"),
                     pl.col("%Overvalued").alias("Put %Overvalued"),
+                    *[pl.col(col).alias(f"Put {col}") for col in optional_columns],
+                    *[pl.col(col).cast(pl.Float64).round(4).alias(f"Put {col}") for col in prob_columns],
                 ]
             ),
             on="Strike",
-            how="outer",
+            how="inner",
         )
         .sort("Strike")
         .fill_null("-")
     )
+
+    if "Strike_right" in combined.columns:
+        combined = combined.drop("Strike_right")
 
     st.dataframe(combined.to_pandas(), use_container_width=True)
 
@@ -177,7 +231,8 @@ def build_spreads(
     call_delta_range,
     contract_step,
     max_contract_ratio,
-    min_last_price,
+    max_straddle_ratio,
+    min_option_price,
     max_last_price,
     max_abs_net_delta,
     max_legs_per_side,
@@ -195,7 +250,7 @@ def build_spreads(
         .filter(
             (pl.col("CallDelta") >= call_delta_range[0] / 100)
             & (pl.col("CallDelta") <= call_delta_range[1] / 100)
-            & (pl.col("LastPrice") >= min_last_price)
+            & (pl.col("LastPrice") >= min_option_price)
             & (pl.col("LastPrice") <= max_last_price)
         )
     )
@@ -234,6 +289,14 @@ def build_spreads(
 
             contract_ratio = max(buy_qty, sell_qty) / min(buy_qty, sell_qty)
             if contract_ratio > max_contract_ratio:
+                continue
+
+            is_straddle = (
+                buy["Expiry"] == sell["Expiry"]
+                and buy["Strike"] == sell["Strike"]
+                and buy["Type"] != sell["Type"]
+            )
+            if is_straddle and contract_ratio > max_straddle_ratio:
                 continue
 
             net_delta = buy_delta * buy_qty - sell_delta * sell_qty
@@ -326,6 +389,8 @@ def main():
         key="delta_range",
     )
 
+    greek_columns = ["Delta"] if "Delta" in df.columns else []
+
     st.sidebar.subheader("Spread Filters")
 
     contract_step = st.sidebar.number_input(
@@ -339,17 +404,25 @@ def main():
     max_contract_ratio = st.sidebar.number_input(
         "Max contract ratio",
         min_value=1.0,
-        value=3.0,
-        step=0.5,
+        value=2.5,
+        step=0.1,
         key="contract_ratio",
     )
 
-    min_last_price = st.sidebar.number_input(
-        "Min last price",
+    max_straddle_ratio = st.sidebar.number_input(
+        "Max straddle ratio",
+        min_value=1.0,
+        value=1.5,
+        step=0.1,
+        key="straddle_ratio",
+    )
+
+    min_option_price = st.sidebar.number_input(
+        "Min option price",
         min_value=0.0,
-        value=0.1,
+        value=2.0,
         step=0.05,
-        key="min_last",
+        key="min_option_price",
     )
 
     max_last_price = st.sidebar.number_input(
@@ -400,7 +473,7 @@ def main():
     chain_tab, spreads_tab = st.tabs(["Option Chain", "Spreads"])
 
     with chain_tab:
-        render_chain(df, metric_choice, (call_delta_min, call_delta_max))
+        render_chain(df, metric_choice, (call_delta_min, call_delta_max), min_option_price, greek_columns)
 
     with spreads_tab:
         spreads = build_spreads(
@@ -409,7 +482,8 @@ def main():
             (call_delta_min, call_delta_max),
             int(contract_step),
             max_contract_ratio,
-            min_last_price,
+            max_straddle_ratio,
+            min_option_price,
             max_last_price,
             max_abs_net_delta,
             int(max_legs_per_side),
@@ -465,12 +539,10 @@ def main():
                 "Bid",
                 "Ask",
                 "Mid",
-                "Delta",
-                "Gamma",
-                "Theta",
-                "Vega",
-                "Rho",
                 "FMV",
+                "Prob ITM",
+                "Prob OTM",
+                *greek_columns,
             ]
             available = [c for c in cols if c in df.columns]
 
@@ -483,15 +555,10 @@ def main():
 
             return df.filter(leg_filter).select(available)
 
-        l1, l2 = st.columns(2)
-
-        with l1:
-            st.subheader("Leg 1 (Buy)")
-            st.dataframe(leg_details(selected_spread["BuyKey"]).to_pandas(), use_container_width=True)
-
-        with l2:
-            st.subheader("Leg 2 (Sell)")
-            st.dataframe(leg_details(selected_spread["SellKey"]).to_pandas(), use_container_width=True)
+        st.subheader("Leg 1 (Buy)")
+        st.dataframe(leg_details(selected_spread["BuyKey"]).to_pandas(), use_container_width=True)
+        st.subheader("Leg 2 (Sell)")
+        st.dataframe(leg_details(selected_spread["SellKey"]).to_pandas(), use_container_width=True)
 
 
 if __name__ == "__main__":
