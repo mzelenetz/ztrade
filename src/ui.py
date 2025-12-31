@@ -188,7 +188,13 @@ def render_expiry_block(
     st.dataframe(combined.to_pandas(), use_container_width=True)
 
 
-def render_chain(df, metric_choice, call_delta_range):
+def render_chain(
+    df,
+    metric_choice,
+    call_delta_range,
+    min_option_price: float,
+    greek_columns: list[str],
+):
     st.markdown(
         """
         <style>
@@ -212,7 +218,13 @@ def render_chain(df, metric_choice, call_delta_range):
     )
     for (expiry,), sdf in df.sort("Expiry").group_by("Expiry"):
         with st.expander(expiry.strftime("%d-%b-%y"), expanded=True):
-            render_expiry_block(sdf, metric_choice, call_delta_range)
+            render_expiry_block(
+                sdf,
+                metric_choice,
+                call_delta_range,
+                min_option_price,
+                greek_columns,
+            )
 
 
 def round_to_step(value: float, step: int) -> int:
