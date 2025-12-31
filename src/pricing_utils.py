@@ -266,7 +266,7 @@ class OptionsPrices:
             prices.append(p)
             deltas.append(d)
 
-        return self._finalize_output(prices, deltas)
+        return self._finalize_output(prices, {"Delta": deltas})
 
     def _price_with_mzpricer(self) -> pl.DataFrame:
         data = self._common_inputs()
@@ -293,23 +293,36 @@ class OptionsPrices:
             500,
         )
 
-        deltas = None
+        greek_columns = {}
         if isinstance(greeks, dict):
-            deltas = greeks.get("delta") or greeks.get("Delta")
-        elif isinstance(greeks, (list, tuple)) and len(greeks) > 0:
-            deltas = greeks[0]
+            greek_columns = {
+                "Delta": greeks.get("delta") or greeks.get("Delta"),
+                "Gamma": greeks.get("gamma") or greeks.get("Gamma"),
+                "Theta": greeks.get("theta") or greeks.get("Theta"),
+                "Vega": greeks.get("vega") or greeks.get("Vega"),
+                "Rho": greeks.get("rho") or greeks.get("Rho"),
+            }
+        elif isinstance(greeks, (list, tuple)):
+            labels = ["Delta", "Gamma", "Vega", "Theta", "Rho"]
+            greek_columns = {
+                label: greeks[idx] if idx < len(greeks) else None
+                for idx, label in enumerate(labels)
+            }
 
-        if deltas is None:
-            deltas = [float("nan")] * len(data["S"])
+        return self._finalize_output(prices, greek_columns)
 
-        return self._finalize_output(prices, deltas)
+    def _finalize_output(self, prices, greeks: dict | None) -> pl.DataFrame:
+        output = self.input_data.with_columns(pl.Series("FMV", prices))
 
-    def _finalize_output(self, prices, deltas) -> pl.DataFrame:
-        out = self.input_data.with_columns(
-            pl.Series("FMV", prices), pl.Series("Delta", deltas)
-        )
+        if greeks:
+            for key, values in greeks.items():
+                if values is None:
+                    values = [float("nan")] * len(prices)
+                output = output.with_columns(pl.Series(key, values))
+        elif "Delta" not in output.columns:
+            output = output.with_columns(pl.Series("Delta", [float("nan")] * len(prices)))
 
-        return out.with_columns((pl.col("Last") / pl.col("FMV") - 1).alias("%Overvalued"))
+        return output.with_columns((pl.col("Last") / pl.col("FMV") - 1).alias("%Overvalued"))
 
     def price_options(self) -> pl.DataFrame:
         if self.model == "quantlib":
