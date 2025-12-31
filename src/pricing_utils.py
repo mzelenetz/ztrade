@@ -295,19 +295,9 @@ class OptionsPrices:
 
         greek_columns = {}
         if isinstance(greeks, dict):
-            greek_columns = {
-                "Delta": greeks.get("delta") or greeks.get("Delta"),
-                "Gamma": greeks.get("gamma") or greeks.get("Gamma"),
-                "Theta": greeks.get("theta") or greeks.get("Theta"),
-                "Vega": greeks.get("vega") or greeks.get("Vega"),
-                "Rho": greeks.get("rho") or greeks.get("Rho"),
-            }
+            greek_columns = {"Delta": greeks.get("delta") or greeks.get("Delta")}
         elif isinstance(greeks, (list, tuple)):
-            labels = ["Delta", "Gamma", "Vega", "Theta", "Rho"]
-            greek_columns = {
-                label: greeks[idx] if idx < len(greeks) else None
-                for idx, label in enumerate(labels)
-            }
+            greek_columns = {"Delta": greeks[0] if len(greeks) > 0 else None}
 
         return self._finalize_output(prices, greek_columns)
 

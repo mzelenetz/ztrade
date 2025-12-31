@@ -38,9 +38,9 @@ def add_probabilities(df: pl.DataFrame) -> pl.DataFrame:
         )
 
         if row["Type"] == "C":
-            return normal_cdf(d2)
+            return float(normal_cdf(d2))
 
-        return normal_cdf(-d2)
+        return float(normal_cdf(-d2))
 
     def prob_otm(row: dict) -> float | None:
         itm = prob_itm(row)
@@ -160,7 +160,7 @@ def render_expiry_block(
                 pl.col("BidAsk").alias("Call Bid/Ask"),
                 pl.col("%Overvalued").alias("Call %Overvalued"),
                 *[pl.col(col).alias(f"Call {col}") for col in optional_columns],
-                *[pl.col(col).alias(f"Call {col}") for col in prob_columns],
+                *[pl.col(col).cast(pl.Float64).round(4).alias(f"Call {col}") for col in prob_columns],
             ]
         )
         .join(
@@ -172,11 +172,11 @@ def render_expiry_block(
                     pl.col("BidAsk").alias("Put Bid/Ask"),
                     pl.col("%Overvalued").alias("Put %Overvalued"),
                     *[pl.col(col).alias(f"Put {col}") for col in optional_columns],
-                    *[pl.col(col).alias(f"Put {col}") for col in prob_columns],
+                    *[pl.col(col).cast(pl.Float64).round(4).alias(f"Put {col}") for col in prob_columns],
                 ]
             ),
             on="Strike",
-            how="outer",
+            how="inner",
         )
         .sort("Strike")
         .fill_null("-")
@@ -369,14 +369,7 @@ def main():
         key="delta_range",
     )
 
-    st.sidebar.subheader("Display Columns")
-
-    greek_options = [col for col in ["Delta", "Gamma", "Theta", "Vega", "Rho"] if col in df.columns]
-    greek_columns = st.sidebar.multiselect(
-        "Greeks to show",
-        greek_options,
-        default=["Delta"] if "Delta" in greek_options else greek_options[:1],
-    )
+    greek_columns = ["Delta"] if "Delta" in df.columns else []
 
     st.sidebar.subheader("Spread Filters")
 
@@ -542,15 +535,10 @@ def main():
 
             return df.filter(leg_filter).select(available)
 
-        l1, l2 = st.columns(2)
-
-        with l1:
-            st.subheader("Leg 1 (Buy)")
-            st.dataframe(leg_details(selected_spread["BuyKey"]).to_pandas(), use_container_width=True)
-
-        with l2:
-            st.subheader("Leg 2 (Sell)")
-            st.dataframe(leg_details(selected_spread["SellKey"]).to_pandas(), use_container_width=True)
+        st.subheader("Leg 1 (Buy)")
+        st.dataframe(leg_details(selected_spread["BuyKey"]).to_pandas(), use_container_width=True)
+        st.subheader("Leg 2 (Sell)")
+        st.dataframe(leg_details(selected_spread["SellKey"]).to_pandas(), use_container_width=True)
 
 
 if __name__ == "__main__":
