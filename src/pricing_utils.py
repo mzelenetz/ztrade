@@ -182,7 +182,11 @@ class CBOEOptionsData:
     def _add_durations(self, df: pl.DataFrame) -> pl.DataFrame:
         df = df.with_columns(
             (
-                (pl.col("Expiry").dt.timestamp() - pl.col("ValuationTime").dt.timestamp()) / (365.0 * 24 * 3600)
+                (
+                    pl.col("Expiry").dt.timestamp(time_unit="us")
+                    - pl.col("ValuationTime").dt.timestamp(time_unit="us")
+                )
+                / (365.0 * 24 * 3600 * 1_000_000)
             ).alias("T")
         )
         return df

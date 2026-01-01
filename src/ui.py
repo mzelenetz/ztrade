@@ -227,10 +227,6 @@ def render_chain(
             )
 
 
-def round_to_step(value: float, step: int) -> int:
-    return max(step, int(round(value / step)) * step)
-
-
 def format_contract(ticker, expiry, strike, opt_type):
     expiry_label = expiry.strftime("%b%y")
     opt_label = "c" if opt_type == "C" else "p"
@@ -241,7 +237,6 @@ def build_spreads(
     df,
     metric_choice,
     call_delta_range,
-    contract_step,
     max_contract_ratio,
     max_straddle_ratio,
     min_option_price,
@@ -275,6 +270,7 @@ def build_spreads(
     sells = sorted_legs.tail(max_legs_per_side)
 
     spreads = []
+    base_qty = 10  # anchor quantity on one side
 
     for buy in buys.to_dicts():
         buy_delta = float(buy["Delta"])
@@ -293,44 +289,53 @@ def build_spreads(
             if sell_delta == 0:
                 continue
 
-            buy_qty = contract_step
-            sell_qty = round_to_step(abs(buy_delta) / abs(sell_delta) * contract_step, contract_step)
+            def maybe_add_spread(anchor_buy: bool):
+                # Anchor one side at 10 contracts, size the other to offset delta.
+                if anchor_buy:
+                    buy_qty = base_qty
+                    sell_qty = max(1, int(round(abs(buy_delta) * buy_qty / abs(sell_delta))))
+                else:
+                    sell_qty = base_qty
+                    buy_qty = max(1, int(round(abs(sell_delta) * sell_qty / abs(buy_delta))))
 
-            if sell_qty <= 0:
-                continue
+                if sell_qty <= 0 or buy_qty <= 0:
+                    return
 
-            contract_ratio = max(buy_qty, sell_qty) / min(buy_qty, sell_qty)
-            if contract_ratio > max_contract_ratio:
-                continue
+                contract_ratio = max(buy_qty, sell_qty) / min(buy_qty, sell_qty)
+                if contract_ratio > max_contract_ratio:
+                    return
 
-            is_straddle = (
-                buy["Expiry"] == sell["Expiry"]
-                and buy["Strike"] == sell["Strike"]
-                and buy["Type"] != sell["Type"]
-            )
-            if is_straddle and contract_ratio > max_straddle_ratio:
-                continue
+                is_straddle = (
+                    buy["Expiry"] == sell["Expiry"]
+                    and buy["Strike"] == sell["Strike"]
+                    and buy["Type"] != sell["Type"]
+                )
+                if is_straddle and contract_ratio > max_straddle_ratio:
+                    return
 
-            net_delta = buy_delta * buy_qty - sell_delta * sell_qty
-            if abs(net_delta) > max_abs_net_delta:
-                continue
+                net_delta = buy_delta * buy_qty - sell_delta * sell_qty
+                if abs(net_delta) > max_abs_net_delta:
+                    return
 
-            edge = float(sell["%Overvalued"]) - float(buy["%Overvalued"])
-            if edge <= 0:
-                continue
+                edge = float(sell["%Overvalued"]) - float(buy["%Overvalued"])
+                if edge <= 0:
+                    return
 
-            spreads.append(
-                {
-                    "Buy": format_contract(buy["Ticker"], buy["Expiry"], buy["Strike"], buy["Type"]),
-                    "Sell": format_contract(sell["Ticker"], sell["Expiry"], sell["Strike"], sell["Type"]),
-                    "Buy Qty": buy_qty,
-                    "Sell Qty": sell_qty,
-                    "Net Delta": net_delta,
-                    "Edge": edge,
-                    "BuyKey": buy,
-                    "SellKey": sell,
-                }
-            )
+                spreads.append(
+                    {
+                        "Buy": format_contract(buy["Ticker"], buy["Expiry"], buy["Strike"], buy["Type"]),
+                        "Sell": format_contract(sell["Ticker"], sell["Expiry"], sell["Strike"], sell["Type"]),
+                        "Buy Qty": buy_qty,
+                        "Sell Qty": sell_qty,
+                        "Net Delta": net_delta,
+                        "Edge": edge,
+                        "BuyKey": buy,
+                        "SellKey": sell,
+                    }
+                )
+
+            maybe_add_spread(anchor_buy=True)
+            maybe_add_spread(anchor_buy=False)
 
     return sorted(spreads, key=lambda r: r["Edge"], reverse=True)[:max_results]
 
@@ -405,14 +410,6 @@ def main():
 
     st.sidebar.subheader("Spread Filters")
 
-    contract_step = st.sidebar.number_input(
-        "Contracts per leg",
-        min_value=10,
-        value=10,
-        step=10,
-        key="contract_step",
-    )
-
     max_contract_ratio = st.sidebar.number_input(
         "Max contract ratio",
         min_value=1.0,
@@ -428,6 +425,7 @@ def main():
         step=0.1,
         key="straddle_ratio",
     )
+    st.sidebar.caption("One side is fixed at 10 contracts; the other is sized for near-delta-neutral within these ratios.")
 
     min_option_price = st.sidebar.number_input(
         "Min option price",
@@ -448,7 +446,7 @@ def main():
     max_abs_net_delta = st.sidebar.number_input(
         "Max |net delta|",
         min_value=0.0,
-        value=5.0,
+        value=10.0,
         step=0.5,
         key="net_delta",
     )
@@ -492,7 +490,6 @@ def main():
             df,
             metric_choice,
             (call_delta_min, call_delta_max),
-            int(contract_step),
             max_contract_ratio,
             max_straddle_ratio,
             min_option_price,

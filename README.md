@@ -78,3 +78,8 @@ gcloud run deploy ztrade \
   --allow-unauthenticated \
   --timeout=900
 ```
+## Makefile
+
+Build and deploy all: `make all`
+Just mzpricer: `make mz-build mz-install`
+Just redeploy without touching mzpricer: `make docker push deploy`
