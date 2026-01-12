@@ -49,6 +49,16 @@ Build and run the containerized app:
 ```bash
 docker build -t ztrade-app .
 docker run --rm -p 8080:8080 -e PORT=8080 -e APP_USERS='{"admin":"demo123"}' ztrade-app
+
+# Local
+# after running:
+# gcloud auth application-default login
+# gcloud auth application-default set-quota-project YOUR_PROJECT_ID
+
+docker run --rm -p 8080:8080 -e PORT=8080 -e APP_USERS='{"admin":"demo123"}' -e DATA_SOURCE_TYPE='gcs_closes' -e GOOGLE_APPLICATION_CREDENTIALS=/tmp/adc.json  -v "$HOME/.config/gcloud/application_default_credentials.json:/tmp/adc.json:ro" \
+ztrade-app
+
+
 ```
 Then open http://localhost:8080/ in your browser.
 
@@ -76,7 +86,9 @@ gcloud run deploy ztrade \
   --region us-central1 \
   --platform managed \
   --allow-unauthenticated \
-  --timeout=900
+  --timeout=900 \
+  --set-env-vars=DATA_SOURCE_TYPE=gcs_closes,GCS_CLOSES_BUCKET=ztrade-yesterday-closes,GCS_CLOSES_PREFIX=closes-,GCS_CLOSES_EXTENSION=.csv,GOOGLE_CLOUD_PROJECT=pcrpal
+
 ```
 ## Makefile
 

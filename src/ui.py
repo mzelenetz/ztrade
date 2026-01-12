@@ -59,6 +59,8 @@ def add_probabilities(df: pl.DataFrame) -> pl.DataFrame:
 def load_data(pricing_model: str, close_date: str | None) -> pl.DataFrame:
     source = load_from_env()
 
+    st.sidebar.caption(f"DATA_SOURCE_TYPE={os.getenv('DATA_SOURCE_TYPE')} source={type(source).__name__}")
+
     if isinstance(source, GCSClosesDataSource):
         raw_df = (
             source.load()
@@ -470,9 +472,9 @@ def main():
     spot = float(df["Spot"][0])
     div = df["DividendYield"].mean()
     vol = float(df["Vol30d"][0])
-    valuation_time = df["ValuationTime"].max()
+    # valuation_time = df["ValuationTime"].max()
 
-    st.subheader(f"{ticker} – {valuation_time.date()}")
+    st.subheader(f"{ticker} – {close_date}")
     c1, c2, c3 = st.columns(3)
     c1.metric("Last", f"{spot:.2f}")
     c2.metric("Dividend Yield", f"{div:.2f}")
