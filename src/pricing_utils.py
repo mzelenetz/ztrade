@@ -97,9 +97,18 @@ def get_historical_volatility(ticker_symbols: List[str], as_of, window=30):
     return vols
 
 class CBOEOptionsData:
-    def __init__(self, path: Optional[str] = None, date: str = "", symbols = [], default_vol: float = 0.25, use_remote_vol: bool = False, dataframe: Optional[pl.DataFrame] = None):
+    def __init__(
+        self,
+        path: Optional[str] = None,
+        date: str = "",
+        symbols = [],
+        default_vol: float = 0.25,
+        use_remote_vol: bool = False,
+        dataframe: Optional[pl.DataFrame] = None,
+        as_of: Optional[str] = None,
+    ):
         self.path = path
-        self.date = date
+        self.date = as_of or date
         self.symbols = symbols
         self.default_vol = default_vol
         self.use_remote_vol = use_remote_vol
@@ -135,11 +144,13 @@ class CBOEOptionsData:
         ]
 
 
+        as_of_date = pd.to_datetime(self.date or datetime.today().date()).date()
+
         df = (df.with_columns(
                 pl.datetime(
-                    year=2023,
-                    month=8,
-                    day=23,
+                    year=as_of_date.year,
+                    month=as_of_date.month,
+                    day=as_of_date.day,
                     hour=16,
                     minute=0,
                     second=0,
