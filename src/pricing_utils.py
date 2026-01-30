@@ -180,6 +180,7 @@ class CBOEOptionsData:
                 "close": "Last",             
             })
             .filter(pl.col("Spot") > 0)
+            .filter(pl.col("Expiry") > pl.col("ValuationTime"))
             .select(cols)
         )
         return df

@@ -74,8 +74,9 @@ def load_data(pricing_model: str, close_date: str | None) -> pl.DataFrame:
     default_vol = float(os.getenv("DEFAULT_VOLATILITY", "0.25"))
     use_remote_vol = os.getenv("USE_REMOTE_VOL", "false").lower() == "true"
 
+    raw_df = raw_df.with_columns(pl.lit(as_of).cast(pl.Date).alias("ValuationTime"))
     loader = CBOEOptionsData(
-        date=as_of,
+        date=datetime.now().strftime("%Y-%m-%d"),
         default_vol=default_vol,
         use_remote_vol=use_remote_vol,
         dataframe=raw_df,
