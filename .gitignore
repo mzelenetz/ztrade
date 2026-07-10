@@ -8,3 +8,11 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Frontend
+web/node_modules/
+web/dist/
+
+
+# macOS
+.DS_Store

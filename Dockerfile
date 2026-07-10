@@ -1,3 +1,12 @@
+FROM node:20-slim AS web-build
+
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
+
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -6,7 +15,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/tmp
 
 WORKDIR /app
-
 
 # system deps needed for build + runtime
 RUN apt-get update \
@@ -26,27 +34,11 @@ COPY src ./src
 # install app deps
 RUN pip install .
 
+# built frontend, served by FastAPI
+COPY --from=web-build /web/dist ./web/dist
+
 EXPOSE 8080
 
 ENTRYPOINT []
 
-CMD ["sh","-c","streamlit run /app/src/ui.py \
-  --server.address=0.0.0.0 \
-  --server.port=$PORT \
-  --server.headless=true \
-  --server.enableCORS=false \
-  --server.enableXsrfProtection=false"]
-
-
-# FROM python:3.12-slim
-
-# WORKDIR /app
-
-# RUN pip install --upgrade pip \
-#   && pip install mzpricer   # <- from PyPI wheel (no build-essential, no git)
-
-# COPY pyproject.toml README.md ./
-# COPY src ./src
-# RUN pip install .
-
-# CMD ["sh","-c","streamlit run /app/src/ui.py --server.address=0.0.0.0 --server.port=$PORT --server.headless=true --server.enableCORS=false --server.enableXsrfProtection=false"]
+CMD ["sh","-c","uvicorn src.api.main:app --host 0.0.0.0 --port $PORT"]

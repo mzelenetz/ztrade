@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "boto3>=1.40.40",
     "duckdb>=1.4.2",
+    "fastapi>=0.115.0",
     "google-cloud-storage>=3.7.0",
     "ib-insync>=0.9.86",
     "ijson>=3.4.0.post0",
@@ -19,9 +20,11 @@ dependencies = [
     "polars>=1.31.0",
     "polygon-api-client>=1.15.4",
     "pyarrow>=21.0.0",
+    "pyjwt>=2.9.0",
     "python-dotenv>=1.1.1",
+    "python-multipart>=0.0.20",
     "quantlib>=1.40",
-    "streamlit>=1.50.0",
+    "uvicorn[standard]>=0.32.0",
     "yfinance>=0.2.66",
 ]
 
@@ -34,3 +37,12 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

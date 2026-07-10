@@ -1,8 +1,9 @@
-from mzpricer import option_greeks, option_price, StockPrice, TimeDuration, OptionType
-import pandas as pd 
+import contextlib
+import os
+
+import pandas as pd
 import polars as pl
 import yfinance as yf
-import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -125,6 +126,28 @@ class CBOEOptionsData:
             df = df.filter(pl.col("underlying_symbol").is_in(self.symbols))
         return df
     
+    def _resolve_valuation_date(self, df: pl.DataFrame):
+        """Valuation date priority: explicit as_of/date arg → the data's own
+        quote_date → DATA_AS_OF_DATE env → today.
+
+        Using today's date against prices captured on an earlier close date
+        destroys the model's time value while leaving it in the market price,
+        which manufactures enormous fake '%Overvalued' readings.
+        """
+        if self.date:
+            return pd.to_datetime(self.date).date()
+
+        if "quote_date" in df.columns:
+            quote_date = df["quote_date"].max()
+            if quote_date is not None:
+                return pd.to_datetime(quote_date).date()
+
+        env_date = os.getenv("DATA_AS_OF_DATE")
+        if env_date:
+            return pd.to_datetime(env_date).date()
+
+        return datetime.today().date()
+
     def _prep_data(self, df: pl.DataFrame) -> pl.DataFrame:
         # At the end of this step you'll have
         cols = [
@@ -141,10 +164,14 @@ class CBOEOptionsData:
             "Ask",               # market ask
             "Mid",                # market mid you will compare to fair
             "Last",               # CLose price of the option
+            "MarketIV",           # per-contract market implied vol (if provided)
         ]
 
 
-        as_of_date = pd.to_datetime(self.date or datetime.today().date()).date()
+        as_of_date = self._resolve_valuation_date(df)
+
+        if "implied_volatility_1545" not in df.columns:
+            df = df.with_columns(pl.lit(None, dtype=pl.Float64).alias("implied_volatility_1545"))
 
         df = (df.with_columns(
                 pl.datetime(
@@ -177,14 +204,92 @@ class CBOEOptionsData:
                 "bid_1545": "Bid",              
                 "ask_1545": "Ask",              
                 "mid_1545": "Mid",
-                "close": "Last",             
+                "close": "Last",
+                "implied_volatility_1545": "MarketIV",
             })
             .filter(pl.col("Spot") > 0)
             .filter(pl.col("Expiry") > pl.col("ValuationTime"))
             .select(cols)
         )
+
+        df = self._fix_spots_via_parity(df)
+
+        # Data hygiene: drop quotes that violate no-arbitrage bounds
+        # (option price below intrinsic or above its underlying/strike cap).
+        # These are stale/corrupt prints on illiquid wings — untradeable, and
+        # they otherwise show up as enormous fake "edge".
+        intrinsic = (
+            pl.when(pl.col("Type") == "C")
+            .then((pl.col("Spot") - pl.col("Strike")).clip(lower_bound=0))
+            .otherwise((pl.col("Strike") - pl.col("Spot")).clip(lower_bound=0))
+        )
+        upper_bound = (
+            pl.when(pl.col("Type") == "C").then(pl.col("Spot")).otherwise(pl.col("Strike"))
+        )
+        # 5% tolerance + $0.05 absorbs the 15:45-spot vs 16:00-close timing gap.
+        df = df.filter(
+            (pl.col("Last") >= intrinsic * 0.95 - 0.05)
+            & (pl.col("Last") <= upper_bound * 1.05)
+        )
         return df
     
+    def _fix_spots_via_parity(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Replace a ticker's quoted Spot when its own option prices contradict it.
+
+        Put-call parity gives S ≈ C − P + K·e^(−rT) at each strike; the median
+        across the nearest expiry's strikes is a robust implied spot. Some close
+        files carry a stale/wrong underlying quote (seen: PLTR marked 175.85
+        while its options priced a ~150.8 spot), which corrupts every FMV for
+        that ticker. Only overrides on >2% disagreement so a noisy parity
+        estimate never perturbs a good quote.
+        """
+        rate = 0.045  # rough discount for the parity leg; immaterial at these tenors
+
+        implied_spots: dict[str, float] = {}
+        for (ticker,), group in df.group_by(["Ticker"]):
+            nearest = group["Expiry"].min()
+            sub = group.filter(pl.col("Expiry") == nearest)
+            t_years = (
+                (nearest - sub["ValuationTime"][0]).total_seconds() / (365.0 * 24 * 3600)
+            )
+
+            calls = {r["Strike"]: r["Last"] for r in sub.filter(pl.col("Type") == "C").to_dicts()}
+            puts = {r["Strike"]: r["Last"] for r in sub.filter(pl.col("Type") == "P").to_dicts()}
+            common = [
+                k
+                for k in calls
+                if k in puts
+                and calls[k] is not None
+                and puts[k] is not None
+                and calls[k] > 0.05
+                and puts[k] > 0.05
+            ]
+            if len(common) < 3:
+                continue
+
+            estimates = [calls[k] - puts[k] + k * np.exp(-rate * t_years) for k in common]
+            med = float(np.median(estimates))
+            # Trust parity only when the strikes agree with each other: a tight
+            # spread of estimates means a real (possibly mis-marked) underlying;
+            # wild dispersion means the option data itself is corrupt, and no
+            # single implied spot exists — overriding would poison every price.
+            q25, q75 = np.percentile(estimates, [25, 75])
+            if med <= 0 or (q75 - q25) > 0.05 * med:
+                continue
+            implied_spots[ticker] = med
+
+        def corrected(ticker: str, quoted: float) -> float:
+            implied = implied_spots.get(ticker)
+            if implied is not None and implied > 0 and abs(implied / quoted - 1) > 0.02:
+                return implied
+            return quoted
+
+        return df.with_columns(
+            pl.struct(["Ticker", "Spot"])
+            .map_elements(lambda s: corrected(s["Ticker"], s["Spot"]), return_dtype=pl.Float64)
+            .alias("Spot")
+        )
+
     def _add_vols(self, df: pl.DataFrame, vols: dict) -> pl.DataFrame:
         df = df.with_columns(
             pl.col("Ticker").replace(vols).cast(pl.Float64).alias("Vol30d")
@@ -284,38 +389,77 @@ class OptionsPrices:
 
         return self._finalize_output(prices, {"Delta": deltas})
 
+    @staticmethod
+    @contextlib.contextmanager
+    def _silence_stdout():
+        """mzpricer's Rust code prints a debug line per option; at fd level so
+        it also catches non-Python writes. 16k log lines per request crushes
+        Cloud Run logging throughput."""
+        saved = os.dup(1)
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, 1)
+            yield
+        finally:
+            os.dup2(saved, 1)
+            os.close(devnull)
+            os.close(saved)
+
+    @staticmethod
+    def _analytic_deltas(data: dict) -> list[float]:
+        """Closed-form BSM deltas (e^(−qT)·N(±d1)). The binomial engine's
+        bump-and-reprice greeks were ~10x the cost of pricing itself, and
+        Delta is the only greek the app consumes — analytic is effectively
+        instant and matches the QuantLib path's convention."""
+        from math import erf, exp, log, sqrt
+
+        deltas = []
+        for s, k, t, r, q, sigma, typ in zip(
+            data["S"], data["K"], data["tenors"], data["r"], data["q"], data["sigma"], data["types"]
+        ):
+            if t <= 0 or sigma <= 0 or s <= 0 or k <= 0:
+                deltas.append(None)
+                continue
+            d1 = (log(s / k) + (r - q + 0.5 * sigma**2) * t) / (sigma * sqrt(t))
+            nd1 = 0.5 * (1.0 + erf(d1 / sqrt(2.0)))
+            call_delta = exp(-q * t) * nd1
+            deltas.append(call_delta if typ == "C" else call_delta - exp(-q * t))
+        return deltas
+
     def _price_with_mzpricer(self) -> pl.DataFrame:
+        from mzpricer import option_price, TimeDuration, OptionType
+
         data = self._common_inputs()
-        tenors = [TimeDuration(t, 365) for t in data["tenors"]]
+        # TimeDuration(value, factor) is value/factor years, i.e. value is in days
+        # when factor is 365 — convert the year-fraction tenors accordingly.
+        tenors = [TimeDuration(t * 365.0, 365) for t in data["tenors"]]
         option_types = [OptionType.Call if t == "C" else OptionType.Put for t in data["types"]]
 
-        prices, _ = option_price(
-            data["S"],
-            data["K"],
-            tenors,
-            data["r"],
-            data["sigma"],
-            option_types,
-            500,
-        )
+        # Deltas from the closed form, using the original spot and q.
+        deltas = self._analytic_deltas(data)
 
-        greeks = option_greeks(
-            data["S"],
-            data["K"],
-            tenors,
-            data["r"],
-            data["sigma"],
-            option_types,
-            500,
-        )
+        # mzpricer has no dividend-yield input; approximate continuous dividends by
+        # pricing off the dividend-adjusted spot S·e^(−qT).
+        from math import exp as _exp
 
-        greek_columns = {}
-        if isinstance(greeks, dict):
-            greek_columns = {"Delta": greeks.get("delta") or greeks.get("Delta")}
-        elif isinstance(greeks, (list, tuple)):
-            greek_columns = {"Delta": greeks[0] if len(greeks) > 0 else None}
+        data["S"] = [
+            s * _exp(-q * t) for s, q, t in zip(data["S"], data["q"], data["tenors"])
+        ]
 
-        return self._finalize_output(prices, greek_columns)
+        with self._silence_stdout():
+            prices, _ = option_price(
+                data["S"],
+                data["K"],
+                tenors,
+                data["r"],
+                data["sigma"],
+                option_types,
+                # 200 binomial steps: within $0.01 of 500 steps (far below quote
+                # noise) and much faster — tree size dominates request latency.
+                precision=200,
+            )
+
+        return self._finalize_output(prices, {"Delta": deltas})
 
     def _finalize_output(self, prices, greeks: dict | None) -> pl.DataFrame:
         output = self.input_data.with_columns(pl.Series("FMV", prices))
@@ -328,7 +472,12 @@ class OptionsPrices:
         elif "Delta" not in output.columns:
             output = output.with_columns(pl.Series("Delta", [float("nan")] * len(prices)))
 
-        return output.with_columns((pl.col("Last") / pl.col("FMV") - 1).alias("%Overvalued"))
+        return output.with_columns(
+            pl.when(pl.col("FMV") >= 0.05)
+            .then(pl.col("Last") / pl.col("FMV") - 1)
+            .otherwise(None)
+            .alias("%Overvalued")
+        )
 
     def price_options(self) -> pl.DataFrame:
         if self.model == "quantlib":

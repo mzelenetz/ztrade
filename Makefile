@@ -14,7 +14,8 @@ help:
 	@echo "make docker           - build docker image"
 	@echo "make push             - push image"
 	@echo "make deploy           - deploy to Cloud Run"
-	@echo "make run              - run locally"
+	@echo "make run              - run backend locally (uvicorn, reload)"
+	@echo "make run-web          - run frontend locally (vite dev server)"
 
 # ---------- Python ----------
 venv:
@@ -32,7 +33,18 @@ mz-install:
 
 # ---------- Runtime ----------
 run:
-	. .venv/bin/activate && streamlit run src/ui.py
+	. .venv/bin/activate && uvicorn src.api.main:app --reload --port 8000
+
+run-web:
+	cd web && npm run dev
+
+test:
+	uv run pytest -q
+
+# Runs the full suite including the mzpricer cross-check (mzpricer only exists in the image)
+test-docker:
+	docker run --rm -v "$(PWD)":/repo -w /repo --entrypoint sh ztrade-app \
+	  -c "pip install -q pytest && python -m pytest tests/ -q"
 
 # ---------- Docker / Cloud Run ----------
 docker:
