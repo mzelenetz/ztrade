@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.api.routers import auth, chain, dividends, ideas, meta, spreads, vol_surface
+from src.api.routers import auth, chain, dividends, ideas, meta, settings, spreads, vol_surface
 
 app = FastAPI(title="ztrade")
 
@@ -17,6 +17,7 @@ app.include_router(spreads.router)
 app.include_router(vol_surface.router)
 app.include_router(dividends.router)
 app.include_router(ideas.router)
+app.include_router(settings.router)
 
 WEB_DIST = Path(__file__).resolve().parent.parent.parent / "web" / "dist"
 

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
-import { BookOpen, LogOut } from "lucide-react"
+import { BookOpen, LogOut, Settings } from "lucide-react"
 import { fetchChain, fetchDividends, fetchIdeas, fetchMeta, fetchSpreads, fetchVolSurface } from "@/lib/api"
-import type { Filters, RateCurvePoint } from "@/types"
+import type { Filters } from "@/types"
 import { useAuth } from "@/context/AuthContext"
 import { ThemeToggle } from "@/components/ThemeToggle"
 import { ChainView } from "@/components/ChainView"
@@ -25,41 +25,7 @@ import {
 } from "@/components/ui/select"
 import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-
-const DEFAULT_RATE_CURVE: RateCurvePoint[] = [
-  [30, 0.043],
-  [91, 0.0432],
-  [182, 0.0428],
-  [365, 0.0415],
-  [730, 0.0405],
-  [1095, 0.04],
-]
-
-const MODEL_INPUTS_KEY = "ztrade_model_inputs"
-
-function loadSavedModelInputs(): Partial<Filters> {
-  try {
-    const raw = localStorage.getItem(MODEL_INPUTS_KEY)
-    if (!raw) return {}
-    const parsed = JSON.parse(raw)
-    const saved: Partial<Filters> = {
-      // legacy "historical" mode = flat trailing realized vol
-      volMode: parsed.volMode === "historical" ? "flat" : parsed.volMode,
-      carryMode: parsed.carryMode,
-      dividends: parsed.dividends,
-      dividendSchedule: parsed.dividendSchedule,
-      rateCurve: parsed.rateCurve,
-      marginRatePct: parsed.marginRatePct,
-      marginStyle: parsed.marginStyle,
-    }
-    // Drop absent keys so they don't override defaults with undefined
-    return Object.fromEntries(
-      Object.entries(saved).filter(([, v]) => v !== undefined),
-    ) as Partial<Filters>
-  } catch {
-    return {}
-  }
-}
+import { DEFAULT_RATE_CURVE, loadModelSettings, saveModelSettings } from "@/lib/modelSettings"
 
 const DEFAULT_FILTERS: Filters = {
   pricingModel: "mzpricer",
@@ -87,16 +53,13 @@ export function DashboardPage() {
   const { logout } = useAuth()
   const [filters, setFilters] = useState<Filters>(() => ({
     ...DEFAULT_FILTERS,
-    ...loadSavedModelInputs(),
+    ...loadModelSettings(),
   }))
   const [ticker, setTicker] = useState<string | null>(null)
 
   useEffect(() => {
     const { volMode, carryMode, dividends, dividendSchedule, rateCurve, marginRatePct, marginStyle } = filters
-    localStorage.setItem(
-      MODEL_INPUTS_KEY,
-      JSON.stringify({ volMode, carryMode, dividends, dividendSchedule, rateCurve, marginRatePct, marginStyle }),
-    )
+    saveModelSettings({ volMode, carryMode, dividends, dividendSchedule, rateCurve, marginRatePct, marginStyle })
   }, [filters])
 
   const metaQuery = useQuery({
@@ -178,6 +141,11 @@ export function DashboardPage() {
               <Link to="/methodology">
                 <BookOpen className="size-4" />
                 Methodology
+              </Link>
+            </Button>
+            <Button variant="ghost" size="icon" asChild aria-label="Settings">
+              <Link to="/settings">
+                <Settings className="size-4" />
               </Link>
             </Button>
             <ThemeToggle />
@@ -298,32 +266,9 @@ export function DashboardPage() {
             <CardContent className="space-y-4 pt-6">
               <p className="text-sm font-medium">Spread filters</p>
 
-              <div className="space-y-2">
-                <Label>Margin type</Label>
-                <Select
-                  value={filters.marginStyle}
-                  onValueChange={(v) => updateFilter("marginStyle", v as Filters["marginStyle"])}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="reg_t">Reg T</SelectItem>
-                    <SelectItem value="portfolio">Portfolio margin</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Margin rate (% / yr)</Label>
-                <Input
-                  type="number"
-                  step={0.125}
-                  min={0}
-                  value={filters.marginRatePct}
-                  onChange={(e) => updateFilter("marginRatePct", Number(e.target.value))}
-                />
-              </div>
+              <p className="text-xs text-muted-foreground">
+                Margin type/rate and the rate curve live in Settings (gear icon).
+              </p>
 
               <div className="space-y-2">
                 <Label>Max contract ratio</Label>

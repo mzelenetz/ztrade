@@ -87,6 +87,28 @@ export async function fetchChain(ticker: string, filters: Filters) {
   return data
 }
 
+export interface IngestSettings {
+  tickers: string[]
+  latestCloseDate: string | null
+  bucket: string
+  editable: boolean
+}
+
+export async function fetchIngestSettings() {
+  const { data } = await api.get<IngestSettings>("/settings/ingest")
+  return data
+}
+
+export async function saveIngestTickers(tickers: string[]) {
+  const { data } = await api.put<{ tickers: string[] }>("/settings/ingest/tickers", { tickers })
+  return data
+}
+
+export async function runIngestJob() {
+  const { data } = await api.post<{ started: boolean; execution: string }>("/settings/ingest/run")
+  return data
+}
+
 export async function fetchIdeas(filters: Filters) {
   const { data } = await api.get<IdeasResponse>("/ideas", {
     params: {
