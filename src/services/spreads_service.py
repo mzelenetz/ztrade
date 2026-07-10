@@ -155,6 +155,18 @@ def build_spreads(
                 )
                 net_edge_dollars = gross_edge_dollars - carry_cost
 
+                # Executable edge: what survives crossing the spread — sell the
+                # rich leg at its bid, buy the cheap leg at its ask. Edge that
+                # only exists at mid/last quotes is often phantom.
+                exec_edge_dollars = None
+                sell_bid, buy_ask = sell.get("Bid"), buy.get("Ask")
+                if sell_bid is not None and buy_ask is not None and sell_bid > 0 and buy_ask > 0:
+                    exec_edge_dollars = (
+                        (float(sell_bid) - float(sell["FMV"])) * CONTRACT_MULTIPLIER * sell_qty
+                        + (float(buy["FMV"]) - float(buy_ask)) * CONTRACT_MULTIPLIER * buy_qty
+                        - carry_cost
+                    )
+
                 spreads.append(
                     {
                         "buy": format_contract(buy["Ticker"], buy["Expiry"], buy["Strike"], buy["Type"]),
@@ -168,6 +180,8 @@ def build_spreads(
                         "carryCost": carry_cost,
                         "grossEdgeDollars": gross_edge_dollars,
                         "netEdgeDollars": net_edge_dollars,
+                        "execEdgeDollars": exec_edge_dollars,
+                        "capitalEmployed": capital,
                         "buyLeg": _leg_detail(buy),
                         "sellLeg": _leg_detail(sell),
                     }

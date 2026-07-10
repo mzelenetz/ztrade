@@ -32,7 +32,8 @@ def get_chain(
 
     spot = float(df["Spot"][0])
     dividend_yield = float(df["DividendYield"].mean())
-    vol30d = float(df["Vol30d"][0])
+    # trailing realized vol of the underlying — not a per-contract fitted vol
+    vol30d = float(df["HistVol30d"][0])
     valuation_date = df["ValuationTime"].max().strftime("%Y-%m-%d")
 
     chain = build_chain(df, metric, delta_min, delta_max, min_price)

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 import { BookOpen, LogOut } from "lucide-react"
-import { fetchChain, fetchDividends, fetchMeta, fetchSpreads, fetchVolSurface } from "@/lib/api"
+import { fetchChain, fetchDividends, fetchIdeas, fetchMeta, fetchSpreads, fetchVolSurface } from "@/lib/api"
 import type { Filters, RateCurvePoint } from "@/types"
 import { useAuth } from "@/context/AuthContext"
 import { ThemeToggle } from "@/components/ThemeToggle"
@@ -10,6 +10,7 @@ import { ChainView } from "@/components/ChainView"
 import { SpreadsView } from "@/components/SpreadsView"
 import { VolSurfaceView } from "@/components/VolSurfaceView"
 import { DividendsView } from "@/components/DividendsView"
+import { IdeasView } from "@/components/IdeasView"
 import { ModelInputsCard } from "@/components/ModelInputsCard"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -42,7 +43,8 @@ function loadSavedModelInputs(): Partial<Filters> {
     if (!raw) return {}
     const parsed = JSON.parse(raw)
     const saved: Partial<Filters> = {
-      volMode: parsed.volMode,
+      // "historical" collapsed into "flat" (both = trailing 30d realized vol)
+      volMode: parsed.volMode === "historical" ? "flat" : parsed.volMode,
       carryMode: parsed.carryMode,
       dividends: parsed.dividends,
       dividendSchedule: parsed.dividendSchedule,
@@ -136,6 +138,13 @@ export function DashboardPage() {
     ],
     queryFn: () => fetchVolSurface(ticker!, filters),
     enabled: Boolean(ticker),
+  })
+
+  const ideasQuery = useQuery({
+    queryKey: ["ideas", filters],
+    queryFn: () => fetchIdeas(filters),
+    enabled: Boolean(ticker), // wait for meta so the universe is known
+    staleTime: 5 * 60 * 1000, // scanning every ticker is expensive — don't refetch eagerly
   })
 
   const dividendsQuery = useQuery({
@@ -411,6 +420,7 @@ export function DashboardPage() {
               <TabsTrigger value="spreads">Spreads</TabsTrigger>
               <TabsTrigger value="vol">Vol Surface</TabsTrigger>
               <TabsTrigger value="dividends">Dividends</TabsTrigger>
+              <TabsTrigger value="ideas">Ideas</TabsTrigger>
             </TabsList>
             <TabsContent value="chain">
               <ChainView
@@ -429,6 +439,9 @@ export function DashboardPage() {
                 expiries={volSurfaceQuery.data?.expiries ?? []}
                 loading={volSurfaceQuery.isLoading}
               />
+            </TabsContent>
+            <TabsContent value="ideas">
+              <IdeasView ideas={ideasQuery.data?.ideas ?? []} loading={ideasQuery.isLoading} />
             </TabsContent>
             <TabsContent value="dividends">
               {ticker && (

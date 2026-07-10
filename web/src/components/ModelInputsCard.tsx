@@ -78,8 +78,7 @@ export function ModelInputsCard({ filters, updateFilter }: Props) {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="surface">Fitted surface (market IVs)</SelectItem>
-              <SelectItem value="flat">Flat</SelectItem>
-              <SelectItem value="historical">Historical 30d</SelectItem>
+              <SelectItem value="flat">Flat trailing 30d realized</SelectItem>
             </SelectContent>
           </Select>
         </div>

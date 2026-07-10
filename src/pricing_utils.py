@@ -165,6 +165,8 @@ class CBOEOptionsData:
             "Mid",                # market mid you will compare to fair
             "Last",               # CLose price of the option
             "MarketIV",           # per-contract market implied vol (if provided)
+            "HistVol30d",         # trailing 30d realized vol of the underlying (if provided)
+            "Volume",             # contract trade volume (if provided)
         ]
 
 
@@ -172,6 +174,10 @@ class CBOEOptionsData:
 
         if "implied_volatility_1545" not in df.columns:
             df = df.with_columns(pl.lit(None, dtype=pl.Float64).alias("implied_volatility_1545"))
+        if "hist_vol_30d" not in df.columns:
+            df = df.with_columns(pl.lit(None, dtype=pl.Float64).alias("hist_vol_30d"))
+        if "trade_volume" not in df.columns:
+            df = df.with_columns(pl.lit(None, dtype=pl.Float64).alias("trade_volume"))
 
         df = (df.with_columns(
                 pl.datetime(
@@ -206,6 +212,8 @@ class CBOEOptionsData:
                 "mid_1545": "Mid",
                 "close": "Last",
                 "implied_volatility_1545": "MarketIV",
+                "hist_vol_30d": "HistVol30d",
+                "trade_volume": "Volume",
             })
             .filter(pl.col("Spot") > 0)
             .filter(pl.col("Expiry") > pl.col("ValuationTime"))
@@ -309,22 +317,45 @@ class CBOEOptionsData:
         return df
     
     def _get_vols(self, df: pl.DataFrame) -> dict:
-        ticker_symbols = df.select(pl.col("Ticker")).unique().to_series().to_list()
-        if not self.use_remote_vol:
-            return {sym: self.default_vol for sym in ticker_symbols}
+        """Trailing 30d realized vol per ticker.
 
-        try:
-            vols = get_historical_volatility(ticker_symbols, self.date, window=30)
-            return vols
-        except Exception:
-            # Network or data fetch failures fall back to static vol so the UI remains usable.
-            return {sym: self.default_vol for sym in ticker_symbols}
-    
+        Priority: the hist_vol_30d column stamped by the ingest job (no network,
+        as-of the file's own date) → live yfinance lookup as of the valuation
+        date → the static default. The result is both the flat-vol pricing
+        assumption and the "30d Volatility" shown in the header.
+        """
+        ticker_symbols = df.select(pl.col("Ticker")).unique().to_series().to_list()
+
+        vols: dict[str, float] = {}
+        if "HistVol30d" in df.columns:
+            for ticker in ticker_symbols:
+                v = df.filter(pl.col("Ticker") == ticker)["HistVol30d"].drop_nulls()
+                if v.len() and 0.01 < v[0] < 5.0:
+                    vols[ticker] = float(v[0])
+
+        missing = [t for t in ticker_symbols if t not in vols]
+        if missing:
+            try:
+                as_of = self.date or df["ValuationTime"].max().date().isoformat()
+                vols.update(get_historical_volatility(missing, as_of, window=30))
+            except Exception:
+                # Network or data fetch failures fall back to static vol so the UI remains usable.
+                pass
+
+        for t in ticker_symbols:
+            vols.setdefault(t, self.default_vol)
+        return vols
+
     def get_data(self) -> pl.DataFrame:
         df = self._load_data()
         df = self._prep_data(df)
         vols = self._get_vols(df)
         df = self._add_vols(df, vols)
+        # HistVol30d resolves to the same per-ticker value (filled where the
+        # file lacked it) so the API can report it regardless of vol mode.
+        df = df.with_columns(
+            pl.col("Ticker").replace(vols).cast(pl.Float64).alias("HistVol30d")
+        )
         df = self._add_durations(df)
         return df
     

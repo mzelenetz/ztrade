@@ -3,6 +3,7 @@ import type {
   ChainResponse,
   DividendsResponse,
   Filters,
+  IdeasResponse,
   MetaResponse,
   SpreadsResponse,
   VolSurfaceResponse,
@@ -80,6 +81,28 @@ export async function fetchChain(ticker: string, filters: Filters) {
       delta_min: filters.deltaMin,
       delta_max: filters.deltaMax,
       min_price: filters.minOptionPrice,
+      ...modelInputParams(filters),
+    },
+  })
+  return data
+}
+
+export async function fetchIdeas(filters: Filters) {
+  const { data } = await api.get<IdeasResponse>("/ideas", {
+    params: {
+      pricing_model: filters.pricingModel,
+      close_date: filters.closeDate ?? undefined,
+      metric: filters.metric,
+      delta_min: filters.deltaMin,
+      delta_max: filters.deltaMax,
+      max_contract_ratio: filters.maxContractRatio,
+      max_straddle_ratio: filters.maxStraddleRatio,
+      min_option_price: filters.minOptionPrice,
+      max_last_price: filters.maxLastPrice,
+      max_abs_net_delta: filters.maxAbsNetDelta,
+      max_legs_per_side: filters.maxLegsPerSide,
+      margin_rate: filters.marginRatePct / 100,
+      margin_style: filters.marginStyle,
       ...modelInputParams(filters),
     },
   })

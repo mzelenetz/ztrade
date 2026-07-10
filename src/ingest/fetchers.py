@@ -22,6 +22,7 @@ SCHEMA_COLUMNS = [
     "implied_volatility_1545",
     "trade_volume",
     "open_interest",
+    "hist_vol_30d",  # trailing 30-trading-day realized vol of the underlying, annualized
 ]
 
 
@@ -50,6 +51,7 @@ class YFinanceFetcher:
         tk = yf.Ticker(ticker)
 
         under_bid, under_ask = self._underlying_quote(tk)
+        hist_vol = self._trailing_realized_vol(tk)
         expiries = tk.options
         if not expiries:
             raise RuntimeError(f"{ticker}: no option expiries returned")
@@ -62,7 +64,7 @@ class YFinanceFetcher:
                 continue  # one bad expiry must not kill the ticker
             for side_df, opt_type in ((chain.calls, "C"), (chain.puts, "P")):
                 normalized = self._normalize(
-                    side_df, ticker, quote_date, expiry, opt_type, under_bid, under_ask
+                    side_df, ticker, quote_date, expiry, opt_type, under_bid, under_ask, hist_vol
                 )
                 if normalized.height:
                     frames.append(normalized)
@@ -82,9 +84,24 @@ class YFinanceFetcher:
         return last, last
 
     @staticmethod
+    def _trailing_realized_vol(tk, window: int = 30) -> float | None:
+        """Annualized std of daily log returns over the last `window` trading days."""
+        import numpy as np
+
+        try:
+            closes = tk.history(period="4mo")["Close"].dropna()
+        except Exception:
+            return None
+        if len(closes) < window + 1:
+            return None
+        rets = np.diff(np.log(closes.to_numpy()))[-window:]
+        vol = float(np.std(rets, ddof=1) * np.sqrt(252.0))
+        return vol if 0.01 < vol < 5.0 else None
+
+    @staticmethod
     def _normalize(
         pdf, ticker: str, quote_date: date, expiry: str, opt_type: str,
-        under_bid: float, under_ask: float,
+        under_bid: float, under_ask: float, hist_vol: float | None = None,
     ) -> pl.DataFrame:
         df = pl.from_pandas(
             pdf[["strike", "lastPrice", "bid", "ask", "impliedVolatility", "volume", "openInterest"]]
@@ -120,6 +137,7 @@ class YFinanceFetcher:
             pl.col("impliedVolatility").cast(pl.Float64).alias("implied_volatility_1545"),
             pl.col("volume").cast(pl.Float64).alias("trade_volume"),
             pl.col("openInterest").cast(pl.Float64).alias("open_interest"),
+            pl.lit(hist_vol, dtype=pl.Float64).alias("hist_vol_30d"),
         )
 
 

@@ -78,6 +78,8 @@ def leg_summary(row: dict) -> dict:
         "probOtm": row.get("Prob OTM"),
         "marketIv": row.get("MarketIV"),
         "modelVol": row.get("FittedVol"),
+        "volume": row.get("Volume"),
+        "volFromSurface": row.get("VolFromSurface"),
     }
 
 

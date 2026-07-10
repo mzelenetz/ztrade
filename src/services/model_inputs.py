@@ -452,11 +452,10 @@ def apply_model_inputs(
     df = _apply_dividends(df, carry_mode, dividend_schedule or {})
     df = _recompute_market_ivs(df)
 
-    if vol_mode == "flat":
-        df = df.with_columns(pl.lit(default_vol).alias("Vol30d"))
-    elif vol_mode == "surface":
+    if vol_mode == "surface":
         df = _apply_surface_vols(df, default_vol)
-    # historical: keep Vol30d as produced by CBOEOptionsData._get_vols
+    # "flat" / "historical": keep the per-ticker trailing 30d realized vol the
+    # loader resolved (file column → live lookup → default) as a flat assumption
 
     if "VolFromSurface" not in df.columns:
         df = df.with_columns(pl.lit(False).alias("VolFromSurface"))

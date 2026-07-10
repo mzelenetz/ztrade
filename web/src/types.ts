@@ -101,8 +101,21 @@ export interface Spread {
   carryCost: number
   grossEdgeDollars: number
   netEdgeDollars: number
+  execEdgeDollars: number | null
+  capitalEmployed: number
   buyLeg: LegDetail
   sellLeg: LegDetail
+}
+
+export interface Idea extends Spread {
+  ticker: string
+  confidence: "high" | "medium" | "low"
+  flags: string[]
+  returnOnCapital: number | null
+}
+
+export interface IdeasResponse {
+  ideas: Idea[]
 }
 
 export interface SpreadsResponse {
