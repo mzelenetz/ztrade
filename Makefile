@@ -46,6 +46,31 @@ test-docker:
 	docker run --rm -v "$(PWD)":/repo -w /repo --entrypoint sh ztrade-app \
 	  -c "pip install -q pytest && python -m pytest tests/ -q"
 
+# ---------- Ingestion ----------
+ingest-dry:
+	uv run python -m src.ingest --dry-run /tmp/closes-dry.csv
+
+# One-time (or after changing schedule/env): Cloud Run Job + daily scheduler
+deploy-ingest:
+	gcloud run jobs deploy ztrade-ingest \
+	  --image us-central1-docker.pkg.dev/$(PROJECT)/containers/ztrade:latest \
+	  --project $(PROJECT) --region $(REGION) \
+	  --command python --args -m,src.ingest \
+	  --set-env-vars GCS_CLOSES_BUCKET=ztrade-yesterday-closes \
+	  --cpu 1 --memory 512Mi --task-timeout 15m --max-retries 2
+	gcloud scheduler jobs create http ztrade-ingest-daily \
+	  --project $(PROJECT) --location $(REGION) \
+	  --schedule "45 16 * * 1-5" --time-zone "America/New_York" \
+	  --uri "https://$(REGION)-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$(PROJECT)/jobs/ztrade-ingest:run" \
+	  --http-method POST \
+	  --oauth-service-account-email "$(shell gcloud projects describe $(PROJECT) --format='value(projectNumber)')-compute@developer.gserviceaccount.com" \
+	  || gcloud scheduler jobs update http ztrade-ingest-daily \
+	  --project $(PROJECT) --location $(REGION) \
+	  --schedule "45 16 * * 1-5" --time-zone "America/New_York"
+
+ingest-run:
+	gcloud run jobs execute ztrade-ingest --project $(PROJECT) --region $(REGION) --wait
+
 # ---------- Docker / Cloud Run ----------
 docker:
 	docker buildx build \

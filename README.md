@@ -76,7 +76,26 @@ ztrade-app
 Then open http://localhost:8080/ in your browser.
 
 ### Sample Data
-A small CSV at `src/data/sample_NVDA.csv` is included for offline exploration. Point `DATA_SOURCE_PATH` at your own file or cloud object for production data.
+A small CSV at `src/data/sample_NVDA.csv` is included for offline exploration (note: its dates are shifted and its quotes are internally inconsistent — use `tests/fixtures/closes-nvda-2026-01-29.csv` for realistic local work). Point `DATA_SOURCE_PATH` at your own file or cloud object for production data.
+
+## Daily ingestion
+A Cloud Run Job (`ztrade-ingest`) fetches full option chains after each close and
+publishes `closes-YYYY-MM-DD.csv` to `gs://ztrade-yesterday-closes`, so the app's
+date picker has fresh data every morning. Cloud Scheduler triggers it weekdays at
+4:45pm ET (`ztrade-ingest-daily`).
+
+- **Source**: yfinance for now. The fetcher sits behind the `ChainFetcher`
+  protocol in `src/ingest/fetchers.py` — a purchased data feed later is one new
+  class plus `INGEST_SOURCE=<name>` on the job.
+- **Ticker universe**: edit `gs://ztrade-yesterday-closes/tickers.txt` (one
+  symbol per line, `#` comments) — no redeploy needed. Falls back to a `TICKERS`
+  env var, then to the built-in six.
+- **Validation before publish**: minimum row count, live underlying quote, and a
+  put-call-parity coherence check per ticker — corrupt data is rejected rather
+  than uploaded.
+- Manual run: `make ingest-run` (or `gcloud run jobs execute ztrade-ingest --region us-central1 --wait`).
+- Local dry run (no upload): `make ingest-dry`.
+- Create/update the job + scheduler: `make deploy-ingest`.
 
 ## Development
 - Backend routers live in `src/api/routers/` (`auth.py`, `meta.py`, `chain.py`, `spreads.py`); `src/api/main.py` wires them up and serves the built frontend.
