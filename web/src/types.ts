@@ -143,7 +143,7 @@ export interface Filters {
   maxResults: number
   marginRatePct: number
   marginStyle: "reg_t" | "portfolio"
-  volMode: "surface" | "flat" | "historical"
+  volMode: "surface" | "realized_anchor"
   carryMode: "implied" | "manual"
   dividends: Record<string, number> // ticker → annual yield (decimal)
   dividendSchedule: Record<string, DividendRow[]> // ticker → [(ex-date, amount)]

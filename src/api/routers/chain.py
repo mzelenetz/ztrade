@@ -19,7 +19,7 @@ def get_chain(
     delta_min: float = Query(5),
     delta_max: float = Query(95),
     min_price: float = Query(2.0),
-    vol_mode: str = Query("surface", pattern="^(surface|flat|historical)$"),
+    vol_mode: str = Query("surface", pattern="^(surface|realized_anchor|flat|historical)$"),
     carry_mode: str = Query("implied", pattern="^(implied|manual)$"),
     dividend_schedule: str = Query(""),
     dividends: str = Query(""),

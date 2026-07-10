@@ -26,7 +26,7 @@ def get_ideas(
     max_legs_per_side: int = Query(50),
     margin_rate: float = Query(0.11325, ge=0, le=1),
     margin_style: str = Query("reg_t", pattern="^(reg_t|portfolio)$"),
-    vol_mode: str = Query("surface", pattern="^(surface|flat|historical)$"),
+    vol_mode: str = Query("surface", pattern="^(surface|realized_anchor|flat|historical)$"),
     carry_mode: str = Query("implied", pattern="^(implied|manual)$"),
     dividend_schedule: str = Query(""),
     dividends: str = Query(""),

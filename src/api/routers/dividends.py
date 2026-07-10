@@ -19,7 +19,7 @@ def get_dividends(
     ticker: str = Query(...),
     pricing_model: str = Query("mzpricer"),
     close_date: str | None = Query(None),
-    vol_mode: str = Query("surface", pattern="^(surface|flat|historical)$"),
+    vol_mode: str = Query("surface", pattern="^(surface|realized_anchor|flat|historical)$"),
     carry_mode: str = Query("implied", pattern="^(implied|manual)$"),
     dividend_schedule: str = Query(""),
     dividends: str = Query(""),

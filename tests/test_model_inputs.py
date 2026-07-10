@@ -483,6 +483,47 @@ class TestGlobalVolSurface:
             assert abs(bias) < 0.02, f"expiry fit biased by {bias:+.4f}"
 
 
+class TestRealizedAnchor:
+    def test_ratio_interpolates_atm_at_30_days(self):
+        from src.services.model_inputs import _realized_anchor_ratio
+
+        infos = [
+            {"tenor": 10 / 365, "atm_iv": 0.50},
+            {"tenor": 50 / 365, "atm_iv": 0.40},
+        ]
+        # ATM at 30d: linear between the knots → 0.45; realized 0.36 → ratio 0.8
+        assert _realized_anchor_ratio(infos, 0.36) == pytest.approx(0.8, abs=1e-6)
+
+    def test_ratio_clamps_at_ends_and_guards(self):
+        from src.services.model_inputs import _realized_anchor_ratio
+
+        infos = [{"tenor": 0.5, "atm_iv": 0.40}]
+        assert _realized_anchor_ratio(infos, 0.30) == pytest.approx(0.75)
+        assert _realized_anchor_ratio(infos, None) == 1.0
+        assert _realized_anchor_ratio([], 0.30) == 1.0
+        assert _realized_anchor_ratio(infos, 5.0) == 1.0  # outside sanity band
+
+    def test_anchor_mode_shifts_level_but_preserves_shape(self):
+        """Vols in realized_anchor mode = surface-mode vols × one per-ticker
+        ratio, so relative skew is untouched."""
+        raw = pl.read_csv("tests/fixtures/closes-nvda-2026-01-29.csv")
+        base = CBOEOptionsData(dataframe=raw, default_vol=0.25, use_remote_vol=False).get_data()
+        # pin the realized vol so no live lookup ambiguity
+        base = base.with_columns(pl.lit(0.30).alias("HistVol30d"))
+
+        surface = apply_model_inputs(base, "surface", {}, list(DEFAULT_RATE_CURVE), 0.25)
+        anchored = apply_model_inputs(base, "realized_anchor", {}, list(DEFAULT_RATE_CURVE), 0.25)
+
+        s = surface.filter(pl.col("VolFromSurface")).sort(["Expiry", "Strike", "Type"])
+        a = anchored.filter(pl.col("VolFromSurface")).sort(["Expiry", "Strike", "Type"])
+        ratios = [av / sv for sv, av in zip(s["FittedVol"], a["FittedVol"]) if sv > 0.02]
+        assert len(ratios) > 500
+        # one constant ratio across the whole surface (away from the vol clamp)
+        assert max(ratios) - min(ratios) < 1e-6
+        # NVDA IVs (~0.45) anchored down to realized 0.30 → ratio < 1
+        assert 0.5 < ratios[0] < 1.0
+
+
 class TestEdgeSanityRegression:
     def test_sample_file_edges_are_sane_with_surface(self):
         """Full pipeline on the bundled sample: median |%Overvalued| must stay

@@ -78,9 +78,16 @@ export function ModelInputsCard({ filters, updateFilter }: Props) {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="surface">Fitted surface (market IVs)</SelectItem>
-              <SelectItem value="flat">Flat trailing 30d realized</SelectItem>
+              <SelectItem value="realized_anchor">Surface anchored to 30d realized</SelectItem>
             </SelectContent>
           </Select>
+          {filters.volMode === "realized_anchor" && (
+            <p className="text-xs text-muted-foreground">
+              The fitted surface shifted so its ~30d ATM vol equals the stock's trailing realized
+              vol — a vol-reversion view that keeps skew and term shape. Expect a systematic
+              short-vol lean: implied usually trades above realized.
+            </p>
+          )}
         </div>
 
         <p className="text-xs text-muted-foreground">

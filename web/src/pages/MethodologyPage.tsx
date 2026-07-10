@@ -94,8 +94,18 @@ export function MethodologyPage() {
               "Edge" then means a contract is rich or cheap{" "}
               <strong>relative to its neighbors on the surface</strong> — a relative-value signal,
               not a claim about absolute mispricing. Outside an expiry's quoted strike range the
-              model adopts the contract's own market IV (no opinion → no edge). Flat and
-              historical-vol modes remain available in Model Inputs.
+              model adopts the contract's own market IV (no opinion → no edge).
+              <br />
+              The alternative mode, <strong>"Surface anchored to 30d realized,"</strong> expresses
+              a vol-reversion view: the same fitted surface is ratio-shifted so its ~30-day
+              at-the-money vol equals the stock's trailing 30-day realized vol, keeping skew and
+              term-structure shape intact. That prices the level view ("implied should revert to
+              what the stock actually moves") without taking an accidental view on skew — a flat
+              vol at all strikes would masquerade crash premium as edge. Two caveats: implied vol
+              systematically exceeds realized (the variance risk premium), so this mode leans
+              short-vol by construction; and the parallel shift overstates the effect on
+              long-dated expiries, whose vols empirically move less than one-for-one with
+              short-dated vol.
             </li>
             <li>
               <strong>Interest rates</strong> — interpolated from the editable rate curve in Model

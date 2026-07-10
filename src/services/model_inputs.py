@@ -452,10 +452,12 @@ def apply_model_inputs(
     df = _apply_dividends(df, carry_mode, dividend_schedule or {})
     df = _recompute_market_ivs(df)
 
-    if vol_mode == "surface":
-        df = _apply_surface_vols(df, default_vol)
-    # "flat" / "historical": keep the per-ticker trailing 30d realized vol the
-    # loader resolved (file column → live lookup → default) as a flat assumption
+    # "realized_anchor" ratio-shifts the fitted surface so its ~30d ATM level
+    # equals the ticker's trailing realized vol, keeping the smile/term shape.
+    # (Legacy "flat"/"historical" map here: a flat vol at all strikes conflated
+    # the level view with an accidental short-skew view.)
+    anchor = vol_mode in ("realized_anchor", "flat", "historical")
+    df = _apply_surface_vols(df, default_vol, anchor_to_realized=anchor)
 
     if "VolFromSurface" not in df.columns:
         df = df.with_columns(pl.lit(False).alias("VolFromSurface"))
@@ -598,10 +600,53 @@ def _expiry_smile_inputs(group: pl.DataFrame) -> dict | None:
     }
 
 
-def _apply_surface_vols(df: pl.DataFrame, default_vol: float) -> pl.DataFrame:
+# Sanity band for the realized/implied anchor ratio: outside this the realized
+# vol or the ATM estimate is untrustworthy and no shift is applied.
+ANCHOR_RATIO_BAND = (0.5, 2.0)
+ANCHOR_TENOR = 30.0 / 365.0
+
+
+def _realized_anchor_ratio(expiry_infos: list[dict], realized_vol) -> float:
+    """realized_30d ÷ (surface ATM vol interpolated at ~30 days).
+
+    Multiplying every model vol by this ratio re-anchors the surface's level
+    to the stock's trailing realized vol while preserving skew and term shape
+    exactly — the level view without an accidental view on shape.
+    """
+    if realized_vol is None or realized_vol <= 0:
+        return 1.0
+
+    knots = sorted((i["tenor"], i["atm_iv"]) for i in expiry_infos if i is not None)
+    if not knots:
+        return 1.0
+
+    t = ANCHOR_TENOR
+    if t <= knots[0][0]:
+        atm_30 = knots[0][1]
+    elif t >= knots[-1][0]:
+        atm_30 = knots[-1][1]
+    else:
+        atm_30 = next(
+            v0 + (v1 - v0) * (t - t0) / (t1 - t0)
+            for (t0, v0), (t1, v1) in zip(knots, knots[1:])
+            if t0 <= t <= t1
+        )
+
+    if atm_30 <= 0:
+        return 1.0
+    ratio = float(realized_vol) / atm_30
+    if not (ANCHOR_RATIO_BAND[0] <= ratio <= ANCHOR_RATIO_BAND[1]):
+        return 1.0
+    return ratio
+
+
+def _apply_surface_vols(
+    df: pl.DataFrame, default_vol: float, anchor_to_realized: bool = False
+) -> pl.DataFrame:
     """Vol per contract from a single global surface fit per ticker (smile shape
     pooled across expiries in standardized moneyness × ln-time), falling back to
-    the independent per-expiry quadratic, then to the median IV."""
+    the independent per-expiry quadratic, then to the median IV. Optionally
+    ratio-shifted so the ~30d ATM level equals the trailing realized vol."""
     out = []
     for (_,), tdf in df.group_by(["Ticker"], maintain_order=True):
         expiry_groups = [
@@ -616,6 +661,14 @@ def _apply_surface_vols(df: pl.DataFrame, default_vol: float) -> pl.DataFrame:
                 if info is not None
             ]
         )
+
+        shift = 1.0
+        if anchor_to_realized:
+            realized = tdf["HistVol30d"].drop_nulls()
+            shift = _realized_anchor_ratio(
+                [info for _, info in expiry_groups],
+                realized[0] if realized.len() else None,
+            )
 
         for group, info in expiry_groups:
             strikes = group["Strike"].to_list()
@@ -675,6 +728,11 @@ def _apply_surface_vols(df: pl.DataFrame, default_vol: float) -> pl.DataFrame:
                     fallback = _median_iv(ivs) or default_vol
                     vols = [fallback] * len(strikes)
                     from_surface = [False] * len(strikes)
+
+            if shift != 1.0:
+                vols = [
+                    min(max(v * shift, VOL_CLAMP[0]), VOL_CLAMP[1]) for v in vols
+                ]
 
             out.append(
                 group.with_columns(
