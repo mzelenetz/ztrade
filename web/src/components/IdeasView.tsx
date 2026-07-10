@@ -4,6 +4,7 @@ import type { ColDef, ICellRendererParams, ValueFormatterParams } from "ag-grid-
 import type { Idea } from "@/types"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { LegCard } from "@/components/LegCard"
 
 function dollars(value: number | null | undefined) {
   if (value === null || value === undefined) return "–"
@@ -121,6 +122,13 @@ export function IdeasView({ ideas, loading }: { ideas: Idea[]; loading: boolean 
             )}
           </CardContent>
         </Card>
+      )}
+
+      {selected && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <LegCard title={`Buy ${selected.buyQty}×`} leg={selected.buyLeg} />
+          <LegCard title={`Sell ${selected.sellQty}×`} leg={selected.sellLeg} />
+        </div>
       )}
     </div>
   )

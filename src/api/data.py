@@ -10,7 +10,7 @@ import polars as pl
 
 from src.data_sources import GCSClosesDataSource, load_from_env
 from src.pricing_utils import CBOEOptionsData, OptionsPrices
-from src.services.chain_service import add_probabilities
+from src.services.chain_service import add_greeks, add_probabilities
 from src.services.model_inputs import DEFAULT_RATE_CURVE, apply_model_inputs
 
 # Close files are immutable once written, so priced results for an explicit
@@ -142,7 +142,7 @@ def get_priced_data(
             prices = OptionsPrices(df_opts)
             setattr(prices, "model", pricing_model)
 
-        priced = add_probabilities(prices.price_options())
+        priced = add_greeks(add_probabilities(prices.price_options()))
         _cache[key] = (time.monotonic(), priced)
         return priced
 

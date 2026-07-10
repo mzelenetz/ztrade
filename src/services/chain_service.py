@@ -9,6 +9,58 @@ def normal_cdf(value: float) -> float:
     return 0.5 * (1.0 + erf(value / sqrt(2.0)))
 
 
+def add_greeks(df: pl.DataFrame) -> pl.DataFrame:
+    """Closed-form BSM greeks at the model vol (FittedVol). Delta is set by the
+    pricing engines; gamma/vega/theta/rho come from here for both. Conventions:
+    vega per 1 vol point, theta per calendar day, rho per 1% rate move."""
+    from math import exp, log, pi, sqrt
+
+    def greeks(row: dict) -> dict:
+        S, K = row["Spot"], row["Strike"]
+        r, q = row["Rate"], row["DividendYield"]
+        sigma, t = row["FittedVol"], row["T"]
+        if not all(v is not None for v in (S, K, r, q, sigma, t)) or min(S, K, sigma, t) <= 0:
+            return {"Gamma": None, "Vega": None, "Theta": None, "Rho": None}
+
+        sqt = sqrt(t)
+        d1 = (log(S / K) + (r - q + 0.5 * sigma**2) * t) / (sigma * sqt)
+        d2 = d1 - sigma * sqt
+        pdf = exp(-0.5 * d1 * d1) / sqrt(2 * pi)
+        nd1, nd2 = normal_cdf(d1), normal_cdf(d2)
+
+        gamma = exp(-q * t) * pdf / (S * sigma * sqt)
+        vega = S * exp(-q * t) * pdf * sqt / 100.0
+
+        if row["Type"] == "C":
+            theta_yr = (
+                -S * exp(-q * t) * pdf * sigma / (2 * sqt)
+                - r * K * exp(-r * t) * nd2
+                + q * S * exp(-q * t) * nd1
+            )
+            rho = K * t * exp(-r * t) * nd2 / 100.0
+        else:
+            theta_yr = (
+                -S * exp(-q * t) * pdf * sigma / (2 * sqt)
+                + r * K * exp(-r * t) * normal_cdf(-d2)
+                - q * S * exp(-q * t) * normal_cdf(-d1)
+            )
+            rho = -K * t * exp(-r * t) * normal_cdf(-d2) / 100.0
+
+        return {"Gamma": gamma, "Vega": vega, "Theta": theta_yr / 365.0, "Rho": rho}
+
+    out = df.with_columns(
+        pl.struct(["Spot", "Strike", "Rate", "DividendYield", "FittedVol", "T", "Type"])
+        .map_elements(
+            greeks,
+            return_dtype=pl.Struct(
+                {"Gamma": pl.Float64, "Vega": pl.Float64, "Theta": pl.Float64, "Rho": pl.Float64}
+            ),
+        )
+        .alias("_greeks")
+    )
+    return out.unnest("_greeks")
+
+
 def add_probabilities(df: pl.DataFrame) -> pl.DataFrame:
     def prob_itm(row: dict) -> float | None:
         spot = float(row["Spot"])
@@ -80,6 +132,13 @@ def leg_summary(row: dict) -> dict:
         "modelVol": row.get("FittedVol"),
         "volume": row.get("Volume"),
         "volFromSurface": row.get("VolFromSurface"),
+        "openInterest": row.get("OpenInterest"),
+        "bidSize": row.get("BidSize"),
+        "askSize": row.get("AskSize"),
+        "gamma": row.get("Gamma"),
+        "vega": row.get("Vega"),
+        "theta": row.get("Theta"),
+        "rho": row.get("Rho"),
     }
 
 

@@ -167,6 +167,9 @@ class CBOEOptionsData:
             "MarketIV",           # per-contract market implied vol (if provided)
             "HistVol30d",         # trailing 30d realized vol of the underlying (if provided)
             "Volume",             # contract trade volume (if provided)
+            "OpenInterest",       # open interest (if provided)
+            "BidSize",            # quoted bid size (if provided)
+            "AskSize",            # quoted ask size (if provided)
         ]
 
 
@@ -178,6 +181,12 @@ class CBOEOptionsData:
             df = df.with_columns(pl.lit(None, dtype=pl.Float64).alias("hist_vol_30d"))
         if "trade_volume" not in df.columns:
             df = df.with_columns(pl.lit(None, dtype=pl.Float64).alias("trade_volume"))
+        for optional in ("open_interest", "bid_size_1545", "ask_size_1545"):
+            if optional not in df.columns:
+                df = df.with_columns(pl.lit(None, dtype=pl.Float64).alias(optional))
+            else:
+                # sparsely populated vendor columns come in as strings
+                df = df.with_columns(pl.col(optional).cast(pl.Float64, strict=False))
 
         df = (df.with_columns(
                 pl.datetime(
@@ -214,6 +223,9 @@ class CBOEOptionsData:
                 "implied_volatility_1545": "MarketIV",
                 "hist_vol_30d": "HistVol30d",
                 "trade_volume": "Volume",
+                "open_interest": "OpenInterest",
+                "bid_size_1545": "BidSize",
+                "ask_size_1545": "AskSize",
             })
             .filter(pl.col("Spot") > 0)
             .filter(pl.col("Expiry") > pl.col("ValuationTime"))

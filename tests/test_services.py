@@ -213,6 +213,52 @@ class TestBuildSpreads:
         assert run_build_spreads(max_contract_ratio=1.9) == []
 
 
+class TestGreeks:
+    def test_matches_finite_differences(self):
+        import polars as pl_mod
+
+        from src.services.chain_service import add_greeks
+        from src.services.margin_service import bs_price
+
+        S, K, r, q, vol, T = 100.0, 105.0, 0.04, 0.01, 0.35, 0.6
+        for typ in ("C", "P"):
+            df = pl_mod.DataFrame(
+                {
+                    "Spot": [S], "Strike": [K], "Rate": [r], "DividendYield": [q],
+                    "FittedVol": [vol], "T": [T], "Type": [typ],
+                }
+            )
+            g = add_greeks(df).to_dicts()[0]
+
+            h = 0.01
+            def price(s=S, sig=vol, t=T, rr=r):
+                return bs_price(s, K, rr, q, sig, t, typ)
+
+            gamma_fd = (price(S + h) - 2 * price(S) + price(S - h)) / h**2
+            vega_fd = (price(sig=vol + 0.0001) - price(sig=vol - 0.0001)) / 0.0002 / 100
+            theta_fd = (price(t=T - 1 / 365) - price(t=T)) / 1.0  # per day, decay
+            rho_fd = (price(rr=r + 0.0001) - price(rr=r - 0.0001)) / 0.0002 / 100
+
+            assert g["Gamma"] == pytest.approx(gamma_fd, rel=1e-3)
+            assert g["Vega"] == pytest.approx(vega_fd, rel=1e-3)
+            assert g["Theta"] == pytest.approx(theta_fd, rel=2e-2)
+            assert g["Rho"] == pytest.approx(rho_fd, rel=1e-3)
+
+    def test_bad_inputs_yield_nulls(self):
+        import polars as pl_mod
+
+        from src.services.chain_service import add_greeks
+
+        df = pl_mod.DataFrame(
+            {
+                "Spot": [100.0], "Strike": [100.0], "Rate": [0.04], "DividendYield": [0.0],
+                "FittedVol": [None], "T": [0.5], "Type": ["C"],
+            }
+        )
+        g = add_greeks(df).to_dicts()[0]
+        assert g["Gamma"] is None and g["Vega"] is None
+
+
 def test_format_contract():
     expiry = datetime(2026, 12, 18)
     assert format_contract("NVDA", expiry, 110.0, "C") == "NVDA Dec26 110c"

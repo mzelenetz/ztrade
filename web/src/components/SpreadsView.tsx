@@ -4,7 +4,8 @@ import type { ColDef, ValueFormatterParams } from "ag-grid-community"
 import { useTheme } from "next-themes"
 import { gridThemeDark, gridThemeLight } from "@/lib/ag-grid-setup"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import type { LegDetail, Spread } from "@/types"
+import type { Spread } from "@/types"
+import { LegCard } from "@/components/LegCard"
 
 function fmtNum(digits = 2) {
   return (params: ValueFormatterParams) =>
@@ -28,28 +29,6 @@ const columnDefs: ColDef<Spread>[] = [
   { field: "grossEdgeDollars", headerName: "Gross Edge $", valueFormatter: fmtDollars, width: 120 },
   { field: "netEdgeDollars", headerName: "Net Edge $", valueFormatter: fmtDollars, width: 120, sort: "desc" },
 ]
-
-function LegCard({ title, leg }: { title: string; leg: LegDetail }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{title}</CardTitle>
-      </CardHeader>
-      <CardContent className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
-        <Field label="Ticker" value={leg.ticker} />
-        <Field label="Expiry" value={leg.expiry} />
-        <Field label="Strike" value={leg.strike} />
-        <Field label="Type" value={leg.type === "C" ? "Call" : "Put"} />
-        <Field label="Last" value={leg.last?.toFixed(2)} />
-        <Field label="Bid/Ask" value={leg.bidAsk} />
-        <Field label="FMV" value={leg.fmv?.toFixed(2)} />
-        <Field label="Delta" value={leg.delta?.toFixed(3)} />
-        <Field label="Prob ITM" value={leg.probItm != null ? `${(leg.probItm * 100).toFixed(1)}%` : "-"} />
-        <Field label="Prob OTM" value={leg.probOtm != null ? `${(leg.probOtm * 100).toFixed(1)}%` : "-"} />
-      </CardContent>
-    </Card>
-  )
-}
 
 function dollars(value: number) {
   const rounded = Math.round(value)

@@ -11,6 +11,15 @@ export interface LegSummary {
   probOtm: number | null
   marketIv: number | null
   modelVol: number | null
+  volume: number | null
+  volFromSurface: boolean | null
+  openInterest: number | null
+  bidSize: number | null
+  askSize: number | null
+  gamma: number | null
+  vega: number | null
+  theta: number | null
+  rho: number | null
 }
 
 export interface LegDetail extends LegSummary {
