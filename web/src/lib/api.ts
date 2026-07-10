@@ -123,6 +123,7 @@ export async function fetchIdeas(filters: Filters) {
       max_last_price: filters.maxLastPrice,
       max_abs_net_delta: filters.maxAbsNetDelta,
       max_legs_per_side: filters.maxLegsPerSide,
+      min_open_interest: filters.minOpenInterest,
       margin_rate: filters.marginRatePct / 100,
       margin_style: filters.marginStyle,
       ...modelInputParams(filters),

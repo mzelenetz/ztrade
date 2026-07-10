@@ -150,6 +150,7 @@ export interface Filters {
   maxAbsNetDelta: number
   maxLegsPerSide: number
   maxResults: number
+  minOpenInterest: number
   marginRatePct: number
   marginStyle: "reg_t" | "portfolio"
   volMode: "surface" | "realized_anchor" | "flat"

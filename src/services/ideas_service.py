@@ -14,6 +14,12 @@ MAX_IDEAS = 20
 REL_SPREAD_SOFT_LIMIT = 0.08  # legs quoted wider than 8% of mid are suspect
 MIN_LEG_VOLUME = 25           # fewer contracts traded → quote may be stale
 
+# Fillability proxies when no quote size is displayed: you can realistically
+# trade about a quarter of a contract's daily volume, or ~5% of its open
+# interest, without materially moving the market.
+CAPACITY_VOLUME_FRACTION = 0.25
+CAPACITY_OI_FRACTION = 0.05
+
 
 def _leg_rel_spread(leg: dict) -> float | None:
     bid, ask, mid = leg.get("bid"), leg.get("ask"), leg.get("mid")
@@ -22,23 +28,58 @@ def _leg_rel_spread(leg: dict) -> float | None:
     return (ask - bid) / mid
 
 
-def assess_spread(spread: dict) -> dict | None:
+def leg_capacity(leg: dict, side: str) -> float | None:
+    """Contracts you can plausibly execute on this leg right now.
+
+    The displayed quote size is the direct answer (ask size when buying, bid
+    size when selling). Without sizes (current data lacks them), fall back to
+    volume/OI fractions. None = no liquidity information at all.
+    """
+    size = leg.get("askSize") if side == "buy" else leg.get("bidSize")
+    if size is not None and size > 0:
+        return float(size)
+
+    vol = leg.get("volume")
+    oi = leg.get("openInterest")
+    estimates = []
+    if vol is not None:
+        estimates.append(CAPACITY_VOLUME_FRACTION * vol)
+    if oi is not None:
+        estimates.append(CAPACITY_OI_FRACTION * oi)
+    return max(estimates) if estimates else None
+
+
+def assess_spread(spread: dict, min_open_interest: float = 0.0) -> dict | None:
     """Score one spread as an idea. Returns None when it can't qualify at all
-    (no executable edge computable, or non-positive net edge)."""
+    (non-positive net edge, or a leg's open interest below the hard floor)."""
     net = spread.get("netEdgeDollars")
     exec_edge = spread.get("execEdgeDollars")
     capital = spread.get("capitalEmployed") or 0.0
     if net is None or net <= 0:
         return None
 
+    legs = (
+        ("buy", spread["buyLeg"], spread.get("buyQty") or 0),
+        ("sell", spread["sellLeg"], spread.get("sellQty") or 0),
+    )
+
+    # Hard floor: below this open interest there's effectively no market to
+    # put the position on, regardless of what the quotes claim.
+    if min_open_interest > 0:
+        for _, leg, _ in legs:
+            oi = leg.get("openInterest")
+            if oi is not None and oi < min_open_interest:
+                return None
+
     flags: list[str] = []
+    severe_fill_shortfall = False
 
     if exec_edge is None:
         flags.append("no executable quotes on a leg")
     elif exec_edge <= 0:
         flags.append("edge does not survive bid/ask cross")
 
-    for name, leg in (("buy", spread["buyLeg"]), ("sell", spread["sellLeg"])):
+    for name, leg, qty in legs:
         rel = _leg_rel_spread(leg)
         if rel is None:
             flags.append(f"{name} leg missing quotes")
@@ -52,8 +93,17 @@ def assess_spread(spread: dict) -> dict | None:
         if leg.get("volFromSurface") is False:
             flags.append(f"{name} leg vol not from fitted surface")
 
-    # Confidence: does the edge survive execution, and are the quotes real?
-    if exec_edge is not None and exec_edge > 0 and not flags:
+        capacity = leg_capacity(leg, name)
+        if capacity is not None and qty > capacity:
+            flags.append(f"{name} leg fill: needs {qty}, capacity ~{capacity:.0f}")
+            if capacity < qty / 2:
+                severe_fill_shortfall = True
+
+    # Confidence: does the edge survive execution, are the quotes real, and
+    # can the position actually be put on?
+    if severe_fill_shortfall:
+        confidence = "low"
+    elif exec_edge is not None and exec_edge > 0 and not flags:
         confidence = "high"
     elif exec_edge is not None and exec_edge > 0 and len(flags) <= 2:
         confidence = "medium"
@@ -68,7 +118,9 @@ def assess_spread(spread: dict) -> dict | None:
     }
 
 
-def build_ideas(spreads_by_ticker: dict[str, list[dict]]) -> list[dict]:
+def build_ideas(
+    spreads_by_ticker: dict[str, list[dict]], min_open_interest: float = 0.0
+) -> list[dict]:
     """Assess every ticker's spreads, keep the strongest few per name for
     diversity, and rank the survivors across names.
 
@@ -77,7 +129,7 @@ def build_ideas(spreads_by_ticker: dict[str, list[dict]]) -> list[dict]:
     """
     assessed: list[dict] = []
     for ticker, spreads in spreads_by_ticker.items():
-        ideas = [a for s in spreads if (a := assess_spread(s)) is not None]
+        ideas = [a for s in spreads if (a := assess_spread(s, min_open_interest)) is not None]
         conf_rank = {"high": 0, "medium": 1, "low": 2}
         ideas.sort(
             key=lambda x: (

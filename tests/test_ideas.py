@@ -1,19 +1,33 @@
 """Cross-ticker idea scoring: executable edge, confidence checks, diversity cap."""
 
-from src.services.ideas_service import MAX_IDEAS, MAX_PER_TICKER, assess_spread, build_ideas
+from src.services.ideas_service import (
+    MAX_IDEAS,
+    MAX_PER_TICKER,
+    assess_spread,
+    build_ideas,
+    leg_capacity,
+)
 
 
-def leg(bid=4.9, ask=5.1, mid=5.0, volume=500, vol_from_surface=True):
-    return {"bid": bid, "ask": ask, "mid": mid, "volume": volume, "volFromSurface": vol_from_surface}
+def leg(bid=4.9, ask=5.1, mid=5.0, volume=500, vol_from_surface=True,
+        open_interest=1000.0, bid_size=None, ask_size=None):
+    return {
+        "bid": bid, "ask": ask, "mid": mid, "volume": volume,
+        "volFromSurface": vol_from_surface, "openInterest": open_interest,
+        "bidSize": bid_size, "askSize": ask_size,
+    }
 
 
-def spread(net=1000.0, exec_edge=800.0, capital=10_000.0, buy_leg=None, sell_leg=None):
+def spread(net=1000.0, exec_edge=800.0, capital=10_000.0, buy_leg=None, sell_leg=None,
+           buy_qty=10, sell_qty=10):
     return {
         "netEdgeDollars": net,
         "execEdgeDollars": exec_edge,
         "capitalEmployed": capital,
         "grossEdgeDollars": net + 50,
         "carryCost": 50.0,
+        "buyQty": buy_qty,
+        "sellQty": sell_qty,
         "buyLeg": buy_leg or leg(),
         "sellLeg": sell_leg or leg(),
     }
@@ -56,6 +70,45 @@ class TestAssess:
                 sell_leg=leg(bid=4.0, ask=6.0),
             )
         )
+        assert idea["confidence"] == "low"
+
+
+class TestOpenInterestFilter:
+    def test_thin_oi_leg_disqualifies(self):
+        s = spread(sell_leg=leg(open_interest=12.0))
+        assert assess_spread(s, min_open_interest=50) is None
+        assert assess_spread(s, min_open_interest=0) is not None  # filter off
+
+    def test_missing_oi_passes_the_hard_filter(self):
+        # No OI data ≠ zero OI — don't silently drop; capacity flags handle it
+        s = spread(buy_leg=leg(open_interest=None))
+        assert assess_spread(s, min_open_interest=50) is not None
+
+
+class TestFillability:
+    def test_quote_size_is_the_direct_capacity(self):
+        assert leg_capacity(leg(ask_size=7.0), "buy") == 7.0
+        assert leg_capacity(leg(bid_size=3.0), "sell") == 3.0
+
+    def test_proxy_capacity_from_volume_and_oi(self):
+        # max(0.25·volume, 0.05·OI) = max(0.25·40, 0.05·400) = max(10, 20) = 20
+        assert leg_capacity(leg(volume=40.0, open_interest=400.0), "buy") == 20.0
+        assert leg_capacity(leg(volume=None, open_interest=None), "buy") is None
+
+    def test_shortfall_flagged_and_severe_forces_low(self):
+        # capacity 20, needs 25 → flagged but not severe
+        idea = assess_spread(spread(buy_qty=25, buy_leg=leg(volume=40.0, open_interest=400.0)))
+        assert any("fill" in f for f in idea["flags"])
+        assert idea["confidence"] == "medium"
+
+        # capacity 20, needs 50 → severe → low regardless of exec edge
+        idea = assess_spread(spread(buy_qty=50, buy_leg=leg(volume=40.0, open_interest=400.0)))
+        assert idea["confidence"] == "low"
+
+    def test_displayed_size_overrides_generous_proxies(self):
+        # Deep OI but the screen only shows 2 offered where 10 are needed
+        idea = assess_spread(spread(buy_qty=10, buy_leg=leg(ask_size=2.0, volume=5000, open_interest=50000)))
+        assert any("needs 10, capacity ~2" in f for f in idea["flags"])
         assert idea["confidence"] == "low"
 
 

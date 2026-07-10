@@ -40,6 +40,7 @@ const DEFAULT_FILTERS: Filters = {
   maxAbsNetDelta: 10.0,
   maxLegsPerSide: 50,
   maxResults: 50,
+  minOpenInterest: 50,
   marginRatePct: 11.325,
   marginStyle: "reg_t",
   volMode: "surface",
@@ -269,6 +270,17 @@ export function DashboardPage() {
               <p className="text-xs text-muted-foreground">
                 Margin type/rate and the rate curve live in Settings (gear icon).
               </p>
+
+              <div className="space-y-2">
+                <Label>Min open interest (ideas)</Label>
+                <Input
+                  type="number"
+                  step={10}
+                  min={0}
+                  value={filters.minOpenInterest}
+                  onChange={(e) => updateFilter("minOpenInterest", Number(e.target.value))}
+                />
+              </div>
 
               <div className="space-y-2">
                 <Label>Max contract ratio</Label>

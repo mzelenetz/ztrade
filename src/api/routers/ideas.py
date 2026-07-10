@@ -24,6 +24,7 @@ def get_ideas(
     max_last_price: float = Query(1000.0),
     max_abs_net_delta: float = Query(10.0),
     max_legs_per_side: int = Query(50),
+    min_open_interest: float = Query(50, ge=0),
     margin_rate: float = Query(0.11325, ge=0, le=1),
     margin_style: str = Query("reg_t", pattern="^(reg_t|portfolio)$"),
     vol_mode: str = Query("surface", pattern="^(surface|realized_anchor|flat|historical)$"),
@@ -49,4 +50,4 @@ def get_ideas(
         except Exception:
             continue  # one bad ticker must not empty the whole board
 
-    return {"ideas": build_ideas(spreads_by_ticker)}
+    return {"ideas": build_ideas(spreads_by_ticker, min_open_interest)}
