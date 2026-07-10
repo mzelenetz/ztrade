@@ -523,6 +523,15 @@ class TestRealizedAnchor:
         # NVDA IVs (~0.45) anchored down to realized 0.30 → ratio < 1
         assert 0.5 < ratios[0] < 1.0
 
+    def test_flat_mode_prices_everything_at_realized_vol(self):
+        raw = pl.read_csv("tests/fixtures/closes-nvda-2026-01-29.csv")
+        base = CBOEOptionsData(dataframe=raw, default_vol=0.25, use_remote_vol=False).get_data()
+        base = base.with_columns(pl.lit(0.30).alias("HistVol30d"), pl.lit(0.30).alias("Vol30d"))
+
+        flat = apply_model_inputs(base, "flat", {}, list(DEFAULT_RATE_CURVE), 0.25)
+        assert flat["FittedVol"].unique().to_list() == [0.30]
+        assert not flat["VolFromSurface"].any()
+
 
 class TestEdgeSanityRegression:
     def test_sample_file_edges_are_sane_with_surface(self):

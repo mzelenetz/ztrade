@@ -106,6 +106,11 @@ export function MethodologyPage() {
               short-vol by construction; and the parallel shift overstates the effect on
               long-dated expiries, whose vols empirically move less than one-for-one with
               short-dated vol.
+              <br />
+              Finally, <strong>"Flat 30d realized (naive)"</strong> prices every contract at the
+              stock's trailing realized vol with no smile at all — kept as a baseline so the
+              surface modes can be compared against the naive strategy. Read its edge with care:
+              skew and term structure show up as "mispricing" by construction.
             </li>
             <li>
               <strong>Interest rates</strong> — interpolated from the editable rate curve in Model

@@ -79,6 +79,7 @@ export function ModelInputsCard({ filters, updateFilter }: Props) {
             <SelectContent>
               <SelectItem value="surface">Fitted surface (market IVs)</SelectItem>
               <SelectItem value="realized_anchor">Surface anchored to 30d realized</SelectItem>
+              <SelectItem value="flat">Flat 30d realized (naive)</SelectItem>
             </SelectContent>
           </Select>
           {filters.volMode === "realized_anchor" && (
@@ -86,6 +87,14 @@ export function ModelInputsCard({ filters, updateFilter }: Props) {
               The fitted surface shifted so its ~30d ATM vol equals the stock's trailing realized
               vol — a vol-reversion view that keeps skew and term shape. Expect a systematic
               short-vol lean: implied usually trades above realized.
+            </p>
+          )}
+          {filters.volMode === "flat" && (
+            <p className="text-xs text-muted-foreground">
+              Every contract priced at the stock's trailing 30d realized vol — the naive
+              baseline, for comparison against the surface modes. Its "edge" includes skew and
+              term structure, which the market prices for a reason: wings and long-dated
+              contracts will look mispriced even when they aren't.
             </p>
           )}
         </div>

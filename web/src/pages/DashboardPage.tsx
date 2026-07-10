@@ -43,8 +43,8 @@ function loadSavedModelInputs(): Partial<Filters> {
     if (!raw) return {}
     const parsed = JSON.parse(raw)
     const saved: Partial<Filters> = {
-      // legacy flat/historical modes became the realized-anchor shift
-      volMode: ["historical", "flat"].includes(parsed.volMode) ? "realized_anchor" : parsed.volMode,
+      // legacy "historical" mode = flat trailing realized vol
+      volMode: parsed.volMode === "historical" ? "flat" : parsed.volMode,
       carryMode: parsed.carryMode,
       dividends: parsed.dividends,
       dividendSchedule: parsed.dividendSchedule,

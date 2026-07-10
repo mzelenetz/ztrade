@@ -452,12 +452,18 @@ def apply_model_inputs(
     df = _apply_dividends(df, carry_mode, dividend_schedule or {})
     df = _recompute_market_ivs(df)
 
-    # "realized_anchor" ratio-shifts the fitted surface so its ~30d ATM level
-    # equals the ticker's trailing realized vol, keeping the smile/term shape.
-    # (Legacy "flat"/"historical" map here: a flat vol at all strikes conflated
-    # the level view with an accidental short-skew view.)
-    anchor = vol_mode in ("realized_anchor", "flat", "historical")
-    df = _apply_surface_vols(df, default_vol, anchor_to_realized=anchor)
+    # Three vol treatments:
+    # - "surface": fitted smile surface (relative value)
+    # - "realized_anchor": the surface ratio-shifted so its ~30d ATM level
+    #   equals trailing realized vol (vol-reversion view, shape preserved)
+    # - "flat" (legacy "historical"): every contract at the ticker's trailing
+    #   realized vol — the naive baseline; note its "edge" includes skew,
+    #   which is priced for a reason. Loader already resolved Vol30d to the
+    #   per-ticker realized vol, so it's a no-op here.
+    if vol_mode in ("surface", "realized_anchor"):
+        df = _apply_surface_vols(
+            df, default_vol, anchor_to_realized=vol_mode == "realized_anchor"
+        )
 
     if "VolFromSurface" not in df.columns:
         df = df.with_columns(pl.lit(False).alias("VolFromSurface"))
