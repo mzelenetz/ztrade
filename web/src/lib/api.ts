@@ -6,6 +6,7 @@ import type {
   IdeasResponse,
   MetaResponse,
   SpreadsResponse,
+  VolHistoryResponse,
   VolSurfaceResponse,
 } from "@/types"
 
@@ -83,6 +84,13 @@ export async function fetchChain(ticker: string, filters: Filters) {
       min_price: filters.minOptionPrice,
       ...modelInputParams(filters),
     },
+  })
+  return data
+}
+
+export async function fetchVolHistory(ticker: string, closeDate: string | null, window = 30) {
+  const { data } = await api.get<VolHistoryResponse>("/chain/vol-history", {
+    params: { ticker, close_date: closeDate ?? undefined, window },
   })
   return data
 }

@@ -154,5 +154,38 @@ def list_available_dates() -> list[str]:
     return [d.strftime("%Y-%m-%d") for d in source.list_available_dates()]
 
 
+def get_vol_history(ticker: str, close_date: str | None, window: int = 30) -> list[dict]:
+    """Trailing-30d realized vol as stamped by ingest on each available day.
+
+    Each day's closes file carries the vendor-computed 30d realized vol as of
+    that day, so walking the last `window` available dates gives a genuine
+    day-by-day series of how that trailing figure has moved — not a replay of
+    the 30 daily returns behind a single reading.
+    """
+    dates = list_available_dates()
+    if dates:
+        dates = sorted(dates)
+        if close_date:
+            dates = [d for d in dates if d <= close_date]
+        dates = dates[-window:]
+    else:
+        # No dated history available (e.g. local/dev source) — just the one snapshot.
+        dates = [close_date]
+
+    points: list[dict] = []
+    for d in dates:
+        raw = _load_raw(d)
+        if "hist_vol_30d" not in raw.columns:
+            continue  # older/foreign closes files predate this column
+        raw = raw.filter(pl.col("underlying_symbol") == ticker)
+        if raw.height == 0:
+            continue
+        vol = raw["hist_vol_30d"][0]
+        if vol is None:
+            continue
+        points.append({"date": str(raw["quote_date"][0]), "vol30d": float(vol)})
+    return points
+
+
 def data_source_type() -> str:
     return os.getenv("DATA_SOURCE_TYPE", "local").lower()

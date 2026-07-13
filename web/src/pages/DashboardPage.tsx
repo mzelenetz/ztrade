@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 import { BookOpen, LogOut, Settings } from "lucide-react"
-import { fetchChain, fetchDividends, fetchIdeas, fetchMeta, fetchSpreads, fetchVolSurface } from "@/lib/api"
+import { fetchChain, fetchDividends, fetchIdeas, fetchMeta, fetchSpreads, fetchVolHistory, fetchVolSurface } from "@/lib/api"
 import type { Filters } from "@/types"
 import { useAuth } from "@/context/AuthContext"
 import { ThemeToggle } from "@/components/ThemeToggle"
@@ -12,6 +12,7 @@ import { VolSurfaceView } from "@/components/VolSurfaceView"
 import { DividendsView } from "@/components/DividendsView"
 import { IdeasView } from "@/components/IdeasView"
 import { ModelInputsCard } from "@/components/ModelInputsCard"
+import { VolHistoryMini } from "@/components/VolHistoryMini"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -109,6 +110,12 @@ export function DashboardPage() {
     queryFn: () => fetchIdeas(filters),
     enabled: Boolean(ticker), // wait for meta so the universe is known
     staleTime: 5 * 60 * 1000, // scanning every ticker is expensive — don't refetch eagerly
+  })
+
+  const volHistoryQuery = useQuery({
+    queryKey: ["volHistory", ticker, filters.closeDate],
+    queryFn: () => fetchVolHistory(ticker!, filters.closeDate),
+    enabled: Boolean(ticker),
   })
 
   const dividendsQuery = useQuery({
@@ -363,9 +370,13 @@ export function DashboardPage() {
                 </CardContent>
               </Card>
               <Card>
-                <CardContent className="pt-6">
+                <CardContent className="@container pt-6">
                   <p className="text-sm text-muted-foreground">30d Volatility</p>
                   <p className="text-2xl font-semibold">{stats.vol30d.toFixed(2)}</p>
+                  <VolHistoryMini
+                    points={volHistoryQuery.data?.points ?? []}
+                    loading={volHistoryQuery.isLoading}
+                  />
                 </CardContent>
               </Card>
             </div>

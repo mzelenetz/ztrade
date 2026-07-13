@@ -49,6 +49,16 @@ export interface ChainResponse {
   expiries: ChainExpiry[]
 }
 
+export interface VolHistoryPoint {
+  date: string
+  vol30d: number
+}
+
+export interface VolHistoryResponse {
+  ticker: string
+  points: VolHistoryPoint[]
+}
+
 export interface VolSurfacePoint {
   strike: number
   marketIv: number

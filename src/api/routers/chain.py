@@ -3,7 +3,7 @@ from __future__ import annotations
 import polars as pl
 from fastapi import APIRouter, Depends, Query
 
-from src.api.data import get_priced_data
+from src.api.data import get_priced_data, get_vol_history
 from src.api.deps import get_current_username
 from src.services.chain_service import build_chain
 
@@ -46,3 +46,14 @@ def get_chain(
         "valuationDate": valuation_date,
         **chain,
     }
+
+
+@router.get("/vol-history")
+def get_chain_vol_history(
+    ticker: str = Query(...),
+    close_date: str | None = Query(None),
+    window: int = Query(30, ge=1, le=120),
+    username: str = Depends(get_current_username),
+) -> dict:
+    points = get_vol_history(ticker, close_date, window)
+    return {"ticker": ticker, "points": points}
