@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import threading
 import traceback
+import zlib
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import get_context
@@ -32,7 +33,12 @@ PricingArgs = tuple[str, str | None, str, str, str, str, str]
 #  max_results, margin_rate, margin_style)
 SpreadArgs = tuple
 
-_pool: ProcessPoolExecutor | None = None
+# One single-worker pool per slot, with tickers routed to a slot by stable
+# hash. Workers cache priced data in their own memory (src.api.data._cache),
+# so a ticker must land on the SAME worker every scan to ever hit that cache —
+# a shared pool assigns tasks arbitrarily and fragments it (measured: ~75% of
+# a fully-warm universe re-priced from scratch on the next scan).
+_pools: list[ProcessPoolExecutor] | None = None
 _pool_guard = threading.Lock()
 
 
@@ -40,26 +46,34 @@ def _worker_count() -> int:
     return int(os.getenv("IDEAS_SCAN_WORKERS", str(min(4, os.cpu_count() or 1))))
 
 
-def _get_pool() -> ProcessPoolExecutor:
-    global _pool
+def _get_pools() -> list[ProcessPoolExecutor]:
+    global _pools
     with _pool_guard:
-        if _pool is None:
+        if _pools is None:
             # spawn, not fork: the server process is multi-threaded (uvicorn,
             # warmer) and forking a threaded process risks inherited-lock
             # deadlocks. Workers are long-lived so the one-time import cost
             # of spawn is paid once.
-            _pool = ProcessPoolExecutor(
-                max_workers=_worker_count(), mp_context=get_context("spawn")
-            )
-        return _pool
+            ctx = get_context("spawn")
+            _pools = [
+                ProcessPoolExecutor(max_workers=1, mp_context=ctx)
+                for _ in range(_worker_count())
+            ]
+        return _pools
 
 
-def _dispose_pool() -> None:
-    global _pool
+def _dispose_pools() -> None:
+    global _pools
     with _pool_guard:
-        if _pool is not None:
-            _pool.shutdown(wait=False, cancel_futures=True)
-            _pool = None
+        if _pools is not None:
+            for pool in _pools:
+                pool.shutdown(wait=False, cancel_futures=True)
+            _pools = None
+
+
+def _slot_for(ticker: str, n_slots: int) -> int:
+    # Stable across processes and restarts (unlike hash(), which is salted).
+    return zlib.crc32(ticker.encode()) % n_slots
 
 
 def scan_ticker(ticker: str, pricing: PricingArgs, spread_args: SpreadArgs) -> list[dict]:
@@ -79,8 +93,11 @@ def run_scan(
     broken pool (e.g. an OOM-killed worker) falls back to a sequential
     in-process scan so the request still answers."""
     try:
-        pool = _get_pool()
-        futures = {pool.submit(scan_ticker, t, pricing, spread_args): t for t in tickers}
+        pools = _get_pools()
+        futures = {
+            pools[_slot_for(t, len(pools))].submit(scan_ticker, t, pricing, spread_args): t
+            for t in tickers
+        }
         results: dict[str, list] = {}
         for future in as_completed(futures):
             ticker = futures[future]
@@ -92,7 +109,7 @@ def run_scan(
                 continue  # one bad ticker must not empty the whole board
         return results
     except BrokenProcessPool:
-        _dispose_pool()
+        _dispose_pools()
         results = {}
         for ticker in tickers:
             try:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from src.api.data import list_tickers
+from src.api.data import list_available_dates, list_tickers
 from src.api.deps import get_current_username
 from src.api.ideas_scan import run_scan
 from src.services.ideas_service import build_ideas
@@ -33,6 +33,13 @@ def get_ideas(
     rate_curve: str = Query(""),
     username: str = Depends(get_current_username),
 ) -> dict:
+    if close_date is None:
+        # Pin "latest" to its explicit date so requests that omit the date
+        # share cache entries (and the warmer's work) with the frontend,
+        # which always sends one.
+        dates = list_available_dates()
+        close_date = dates[-1] if dates else None
+
     pricing = (
         pricing_model, close_date, vol_mode, dividends, rate_curve,
         carry_mode, dividend_schedule,
