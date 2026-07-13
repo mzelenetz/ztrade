@@ -22,16 +22,24 @@ _cache: dict[tuple, tuple[float, pl.DataFrame]] = {}
 _RAW_TTL_SECONDS = 600
 _raw_cache: dict[str | None, tuple[float, pl.DataFrame]] = {}
 
-# Coalesce concurrent identical pricing runs: the dashboard fires several
-# endpoints at once with the same model inputs — without a per-key lock each
-# would redundantly reprice the ticker (~seconds of CPU apiece).
+# Coalesce concurrent identical pricing runs: the dashboard (and the ideas
+# endpoint's per-ticker thread pool) fires several requests at once with the
+# same model inputs — without a per-key lock each would redundantly reprice
+# the ticker (~seconds of CPU apiece).
 _key_locks: dict[tuple, threading.Lock] = {}
 _key_locks_guard = threading.Lock()
+_raw_locks: dict[str | None, threading.Lock] = {}
+_raw_locks_guard = threading.Lock()
 
 
 def _lock_for(key: tuple) -> threading.Lock:
     with _key_locks_guard:
         return _key_locks.setdefault(key, threading.Lock())
+
+
+def _raw_lock_for(close_date: str | None) -> threading.Lock:
+    with _raw_locks_guard:
+        return _raw_locks.setdefault(close_date, threading.Lock())
 
 
 def _load_raw(close_date: str | None) -> pl.DataFrame:
@@ -40,19 +48,26 @@ def _load_raw(close_date: str | None) -> pl.DataFrame:
     if cached is not None and now - cached[0] < _RAW_TTL_SECONDS:
         return cached[1]
 
-    source = load_from_env()
+    # Same close_date backs every ticker in a request — without this lock, a
+    # cold cache lets every ticker's thread race to re-download the same file.
+    with _raw_lock_for(close_date):
+        cached = _raw_cache.get(close_date)
+        if cached is not None and now - cached[0] < _RAW_TTL_SECONDS:
+            return cached[1]
 
-    if isinstance(source, GCSClosesDataSource):
-        raw = (
-            source.load()
-            if close_date is None
-            else source.load_for_date(datetime.strptime(close_date, "%Y-%m-%d").date())
-        )
-    else:
-        raw = source.load()
+        source = load_from_env()
 
-    _raw_cache[close_date] = (now, raw)
-    return raw
+        if isinstance(source, GCSClosesDataSource):
+            raw = (
+                source.load()
+                if close_date is None
+                else source.load_for_date(datetime.strptime(close_date, "%Y-%m-%d").date())
+            )
+        else:
+            raw = source.load()
+
+        _raw_cache[close_date] = (now, raw)
+        return raw
 
 
 def list_tickers(close_date: str | None) -> list[str]:
