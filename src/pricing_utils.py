@@ -1,5 +1,6 @@
 import contextlib
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 import polars as pl
@@ -8,6 +9,11 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import List, Optional
 import QuantLib as ql
+
+# Bound on the live yfinance fallback in _get_vols: a ticker whose ingest-time
+# realized vol is missing (e.g. too new to have 30 days of history) shouldn't
+# be able to stall a whole request behind a slow/rate-limited network call.
+VOL_FALLBACK_TIMEOUT_SECONDS = 5.0
 
 
 cols = [
@@ -347,12 +353,17 @@ class CBOEOptionsData:
 
         missing = [t for t in ticker_symbols if t not in vols]
         if missing:
+            as_of = self.date or df["ValuationTime"].max().date().isoformat()
+            executor = ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(get_historical_volatility, missing, as_of, 30)
             try:
-                as_of = self.date or df["ValuationTime"].max().date().isoformat()
-                vols.update(get_historical_volatility(missing, as_of, window=30))
+                vols.update(future.result(timeout=VOL_FALLBACK_TIMEOUT_SECONDS))
             except Exception:
-                # Network or data fetch failures fall back to static vol so the UI remains usable.
+                # Network/timeout/data fetch failures fall back to static vol so the
+                # UI remains usable — don't wait for the thread, just abandon it.
                 pass
+            finally:
+                executor.shutdown(wait=False)
 
         for t in ticker_symbols:
             vols.setdefault(t, self.default_vol)

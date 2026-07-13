@@ -525,28 +525,113 @@ def _apply_dividends(
     return pl.concat(groups) if groups else df
 
 
+def _erf_vec(x: np.ndarray) -> np.ndarray:
+    """Vectorized erf via Abramowitz & Stegun 7.1.26 (max abs error 1.5e-7).
+    numpy has no built-in erf and pulling in scipy for one function isn't
+    worth the dependency — this is well within the precision the 60-step
+    bisection below already targets."""
+    a1, a2, a3, a4, a5 = 0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429
+    p = 0.3275911
+    sign = np.sign(x)
+    ax = np.abs(x)
+    t = 1.0 / (1.0 + p * ax)
+    y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * np.exp(-ax * ax)
+    return sign * y
+
+
+def _norm_cdf_vec(x: np.ndarray) -> np.ndarray:
+    return 0.5 * (1.0 + _erf_vec(x / np.sqrt(2.0)))
+
+
+def _bs_price_vec(
+    spot: np.ndarray, strike: np.ndarray, rate: np.ndarray, dividend: np.ndarray,
+    vol: np.ndarray, tenor: np.ndarray, is_call: np.ndarray,
+) -> np.ndarray:
+    """Numpy sibling of margin_service.bs_price — same Black-Scholes-Merton
+    formula, but elementwise over whole arrays so implied-vol inversion below
+    can batch a full chain instead of looping one contract at a time."""
+    intrinsic = np.maximum(0.0, np.where(is_call, spot - strike, strike - spot))
+
+    safe = (tenor > 0) & (vol > 0)
+    tenor_s = np.where(safe, tenor, 1.0)
+    vol_s = np.where(safe, vol, 1.0)
+    sqrt_t = np.sqrt(tenor_s)
+
+    d1 = (np.log(spot / strike) + (rate - dividend + 0.5 * vol_s**2) * tenor_s) / (vol_s * sqrt_t)
+    d2 = d1 - vol_s * sqrt_t
+
+    disc_div = np.exp(-dividend * tenor_s)
+    disc_rate = np.exp(-rate * tenor_s)
+    call = spot * disc_div * _norm_cdf_vec(d1) - strike * disc_rate * _norm_cdf_vec(d2)
+    put = call - spot * disc_div + strike * disc_rate
+    price = np.where(is_call, call, put)
+    return np.where(safe, price, intrinsic)
+
+
+def _implied_vols_batch(
+    price: np.ndarray, spot: np.ndarray, strike: np.ndarray, rate: np.ndarray,
+    div_yield: np.ndarray, tenor: np.ndarray, is_call: np.ndarray,
+) -> np.ndarray:
+    """Vectorized sibling of implied_vol_from_price — identical bisection
+    over VOL_CLAMP, but the whole chain converges together (60 array-wide
+    iterations) instead of once per row. NaN in / NaN out marks "no IV"
+    (unbracketed price, or missing input), matching the scalar version's None."""
+    n = price.shape[0]
+    result = np.full(n, np.nan, dtype=float)
+
+    valid = (
+        ~np.isnan(price) & (price > 0)
+        & ~np.isnan(spot) & (spot > 0)
+        & ~np.isnan(strike) & (strike > 0)
+        & ~np.isnan(tenor) & (tenor > 0)
+        & ~np.isnan(rate) & ~np.isnan(div_yield)
+    )
+    if not np.any(valid):
+        return result
+
+    p, s, k = price[valid], spot[valid], strike[valid]
+    r, q, t, c = rate[valid], div_yield[valid], tenor[valid], is_call[valid]
+
+    lo = np.full_like(p, VOL_CLAMP[0])
+    hi = np.full_like(p, VOL_CLAMP[1])
+    p_lo = _bs_price_vec(s, k, r, q, lo, t, c)
+    p_hi = _bs_price_vec(s, k, r, q, hi, t, c)
+    bracketed = (p_lo <= p) & (p <= p_hi)
+
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        below = _bs_price_vec(s, k, r, q, mid, t, c) < p
+        lo = np.where(below, mid, lo)
+        hi = np.where(below, hi, mid)
+
+    result[valid] = np.where(bracketed, 0.5 * (lo + hi), np.nan)
+    return result
+
+
 def _recompute_market_ivs(df: pl.DataFrame) -> pl.DataFrame:
     """Replace the vendor MarketIV with IVs inverted from mid quotes under our
     own carry (row Rate / DividendYield), so same-strike call and put IVs obey
-    parity and lie on a single fittable smile."""
+    parity and lie on a single fittable smile.
 
-    def invert(row: dict) -> float | None:
-        price = row["Mid"] if row["Mid"] is not None and row["Mid"] > 0 else row["Last"]
-        return implied_vol_from_price(
-            price=price,
-            spot=row["Spot"],
-            strike=row["Strike"],
-            rate=row["Rate"],
-            div_yield=row["DividendYield"],
-            tenor=row["T"],
-            opt_type=row["Type"],
-        )
+    Vectorized with numpy rather than polars' row-by-row map_elements: a full
+    chain is thousands of rows, each needing a ~60-step bisection, and the
+    per-row Python/struct overhead of map_elements dominated end-to-end
+    pricing time."""
+    mid = df["Mid"].to_numpy()
+    last = df["Last"].to_numpy()
+    price = np.where(~np.isnan(mid) & (mid > 0), mid, last)
 
-    return df.with_columns(
-        pl.struct(["Mid", "Last", "Spot", "Strike", "Rate", "DividendYield", "T", "Type"])
-        .map_elements(invert, return_dtype=pl.Float64)
-        .alias("MarketIV")
+    ivs = _implied_vols_batch(
+        price=price,
+        spot=df["Spot"].to_numpy(),
+        strike=df["Strike"].to_numpy(),
+        rate=df["Rate"].to_numpy(),
+        div_yield=df["DividendYield"].to_numpy(),
+        tenor=df["T"].to_numpy(),
+        is_call=(df["Type"] == "C").to_numpy(),
     )
+
+    return df.with_columns(pl.Series("MarketIV", ivs, dtype=pl.Float64).fill_nan(None))
 
 
 def _expiry_smile_inputs(group: pl.DataFrame) -> dict | None:
