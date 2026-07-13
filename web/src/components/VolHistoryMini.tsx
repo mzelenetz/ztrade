@@ -44,7 +44,7 @@ function MiniSparkline({ points }: { points: VolHistoryPoint[] }) {
 function BigChart({ points }: { points: VolHistoryPoint[] }) {
   const [hover, setHover] = useState<{ x: number; y: number; point: VolHistoryPoint } | null>(null)
 
-  const { xScale, yScale, maxY, ticksY } = useMemo(() => {
+  const { xScale, yScale, ticksY } = useMemo(() => {
     const maxY = Math.max(...points.map((p) => p.vol30d)) * 1.1
     const xScale = (i: number) =>
       BIG_M.left + (points.length > 1 ? (i / (points.length - 1)) * (BIG_W - BIG_M.left - BIG_M.right) : 0)
