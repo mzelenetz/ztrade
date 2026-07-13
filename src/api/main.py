@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from src.api.ideas_scan import start_warmer
 from src.api.routers import auth, chain, dividends, ideas, meta, settings, spreads, vol_surface
 
 app = FastAPI(title="ztrade")
+
+
+@app.on_event("startup")
+def _maybe_start_ideas_warmer() -> None:
+    # Default on against cloud data (where cold scans are expensive), off for
+    # local dev files; IDEAS_WARMER=1/0 overrides either way.
+    default = "1" if os.getenv("DATA_SOURCE_TYPE", "local").lower().startswith("gcs") else "0"
+    if os.getenv("IDEAS_WARMER", default) == "1":
+        start_warmer()
 
 app.include_router(auth.router)
 app.include_router(meta.router)

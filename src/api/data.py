@@ -111,9 +111,15 @@ def get_priced_data(
     Pricing is per-ticker when one is given — a full-book binomial run takes
     minutes; one ticker takes seconds.
     """
+    # Canonicalize the JSON inputs for the key: "" and "{}" (or reordered keys)
+    # describe identical inputs and must not cache-miss against each other —
+    # the background ideas warmer and the frontend send different spellings.
     key = (
-        pricing_model, close_date, vol_mode, dividends_json, rate_curve_json,
-        ticker, carry_mode, dividend_schedule_json,
+        pricing_model, close_date, vol_mode,
+        json.dumps(parse_dividends(dividends_json), sort_keys=True),
+        json.dumps(parse_rate_curve(rate_curve_json)),
+        ticker, carry_mode,
+        json.dumps(parse_dividend_schedule(dividend_schedule_json), sort_keys=True),
     )
     ttl = _CACHE_TTL_DATED if close_date else _CACHE_TTL_LATEST
 
