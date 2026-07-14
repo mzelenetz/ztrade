@@ -1,9 +1,16 @@
 import { createContext, useContext, useState, type ReactNode } from "react"
-import { clearToken, getToken, login as apiLogin, setToken } from "@/lib/api"
+import {
+  clearToken,
+  getToken,
+  requestMagicLink as apiRequestMagicLink,
+  setToken,
+  verifyMagicLink as apiVerifyMagicLink,
+} from "@/lib/api"
 
 interface AuthContextValue {
   isAuthenticated: boolean
-  login: (username: string, password: string) => Promise<void>
+  requestMagicLink: (email: string) => Promise<void>
+  completeLogin: (token: string) => Promise<void>
   logout: () => void
 }
 
@@ -12,9 +19,13 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(() => Boolean(getToken()))
 
-  async function login(username: string, password: string) {
-    const token = await apiLogin(username, password)
-    setToken(token)
+  async function requestMagicLink(email: string) {
+    await apiRequestMagicLink(email)
+  }
+
+  async function completeLogin(token: string) {
+    const accessToken = await apiVerifyMagicLink(token)
+    setToken(accessToken)
     setIsAuthenticated(true)
   }
 
@@ -24,7 +35,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, login, logout }}>
+    <AuthContext.Provider
+      value={{ isAuthenticated, requestMagicLink, completeLogin, logout }}
+    >
       {children}
     </AuthContext.Provider>
   )

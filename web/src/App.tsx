@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom"
 import { LoginPage } from "@/pages/LoginPage"
+import { VerifyPage } from "@/pages/VerifyPage"
 import { DashboardPage } from "@/pages/DashboardPage"
 import { MethodologyPage } from "@/pages/MethodologyPage"
 import { SettingsPage } from "@/pages/SettingsPage"
@@ -9,6 +10,7 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/auth/verify" element={<VerifyPage />} />
       <Route
         path="/"
         element={

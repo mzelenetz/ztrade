@@ -47,10 +47,13 @@ api.interceptors.response.use(
   },
 )
 
-export async function login(username: string, password: string): Promise<string> {
-  const { data } = await api.post<{ access_token: string }>("/auth/login", {
-    username,
-    password,
+export async function requestMagicLink(email: string): Promise<void> {
+  await api.post("/auth/magic/request", { email })
+}
+
+export async function verifyMagicLink(token: string): Promise<string> {
+  const { data } = await api.post<{ access_token: string }>("/auth/magic/verify", {
+    token,
   })
   return data.access_token
 }
@@ -114,6 +117,22 @@ export async function saveIngestTickers(tickers: string[]) {
 
 export async function runIngestJob() {
   const { data } = await api.post<{ started: boolean; execution: string }>("/settings/ingest/run")
+  return data
+}
+
+export interface AllowedUsers {
+  isAdmin: boolean
+  admins: string[]
+  allowed: string[]
+}
+
+export async function fetchAllowedUsers() {
+  const { data } = await api.get<AllowedUsers>("/settings/users")
+  return data
+}
+
+export async function saveAllowedUsers(allowed: string[]) {
+  const { data } = await api.put<{ allowed: string[] }>("/settings/users", { allowed })
   return data
 }
 

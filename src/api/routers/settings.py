@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from src.api.data import data_source_type, list_available_dates
 from src.api.deps import get_current_username
+from src.auth.allowlist import admin_emails, extra_emails, is_admin, set_extra_emails
 from src.ingest.job import bucket_name, load_universe
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -14,6 +15,10 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 class TickersPayload(BaseModel):
     tickers: list[str]
+
+
+class AllowedUsersPayload(BaseModel):
+    allowed: list[str]
 
 
 def _require_gcs() -> None:
@@ -47,6 +52,24 @@ def put_tickers(payload: TickersPayload, username: str = Depends(get_current_use
     blob = storage.Client().bucket(bucket_name()).blob("tickers.txt")
     blob.upload_from_string("\n".join(tickers) + "\n", content_type="text/plain")
     return {"tickers": tickers}
+
+
+@router.get("/users")
+def get_allowed_users(username: str = Depends(get_current_username)) -> dict:
+    """Only an admin sees the roster; everyone else just learns they aren't one,
+    so the Settings UI can hide the card."""
+    if not is_admin(username):
+        return {"isAdmin": False, "admins": [], "allowed": []}
+    return {"isAdmin": True, "admins": sorted(admin_emails()), "allowed": extra_emails()}
+
+
+@router.put("/users")
+def put_allowed_users(
+    payload: AllowedUsersPayload, username: str = Depends(get_current_username)
+) -> dict:
+    if not is_admin(username):
+        raise HTTPException(status_code=403, detail="Only an admin can manage allowed users")
+    return {"allowed": set_extra_emails(payload.allowed)}
 
 
 @router.post("/ingest/run")

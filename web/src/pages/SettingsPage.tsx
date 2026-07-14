@@ -2,7 +2,13 @@ import { useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowLeft, Play, Save } from "lucide-react"
-import { fetchIngestSettings, runIngestJob, saveIngestTickers } from "@/lib/api"
+import {
+  fetchAllowedUsers,
+  fetchIngestSettings,
+  runIngestJob,
+  saveAllowedUsers,
+  saveIngestTickers,
+} from "@/lib/api"
 import {
   DEFAULT_RATE_CURVE,
   loadModelSettings,
@@ -102,6 +108,65 @@ function IngestionCard() {
             <Play className="size-4" /> {run.isPending ? "Starting…" : "Run ingest now"}
           </Button>
         </div>
+
+        {status && <p className="text-sm text-muted-foreground">{status}</p>}
+      </CardContent>
+    </Card>
+  )
+}
+
+function AllowedUsersCard() {
+  const queryClient = useQueryClient()
+  const users = useQuery({ queryKey: ["allowedUsers"], queryFn: fetchAllowedUsers })
+  const [draft, setDraft] = useState<string | null>(null)
+  const [status, setStatus] = useState<string | null>(null)
+
+  const text = draft ?? users.data?.allowed.join("\n") ?? ""
+
+  const save = useMutation({
+    mutationFn: () =>
+      saveAllowedUsers(text.split("\n").map((e) => e.trim()).filter(Boolean)),
+    onSuccess: (d) => {
+      setDraft(null)
+      setStatus(`Saved — ${d.allowed.length} allowed user(s). They can sign in immediately.`)
+      queryClient.invalidateQueries({ queryKey: ["allowedUsers"] })
+    },
+    onError: (e: Error) => setStatus(`Save failed: ${e.message}`),
+  })
+
+  // Non-admins (and the loading state) don't see the card at all.
+  if (!users.data?.isAdmin) return null
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Allowed users</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Anyone listed here can request a magic-link sign-in. Admins are set on
+          the server and always have access:{" "}
+          <strong className="text-foreground">{users.data.admins.join(", ")}</strong>
+        </p>
+
+        <div className="space-y-2">
+          <Label>Allowed emails (one per line)</Label>
+          <Textarea
+            rows={5}
+            className="max-w-xs font-mono"
+            placeholder="name@example.com"
+            value={text}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+        </div>
+
+        <Button
+          size="sm"
+          onClick={() => save.mutate()}
+          disabled={draft === null || save.isPending}
+        >
+          <Save className="size-4" /> Save allowed users
+        </Button>
 
         {status && <p className="text-sm text-muted-foreground">{status}</p>}
       </CardContent>
@@ -214,6 +279,7 @@ export function SettingsPage() {
 
       <main className="mx-auto max-w-[900px] space-y-6 px-6 py-8">
         <IngestionCard />
+        <AllowedUsersCard />
         <ModelDefaultsCard />
       </main>
     </div>

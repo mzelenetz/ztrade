@@ -3,9 +3,17 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
+class MagicLinkRequest(BaseModel):
+    email: str
+
+
+class MagicLinkResponse(BaseModel):
+    # Deliberately generic: never reveals whether the email is on the allowlist.
+    sent: bool = True
+
+
+class VerifyRequest(BaseModel):
+    token: str
 
 
 class TokenResponse(BaseModel):
