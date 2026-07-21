@@ -47,15 +47,17 @@ function useGridTheme() {
 
 function ExpiryGrid({ rows }: { rows: ChainRow[] }) {
   const theme = useGridTheme()
-  const height = Math.min(600, 42 + rows.length * 36)
+  // autoHeight disables row virtualization, so only use it for short tables
+  const autoHeight = rows.length <= 15
 
   return (
-    <div style={{ height }}>
+    <div style={autoHeight ? undefined : { height: 600 }}>
       <AgGridReact
         theme={theme}
         rowData={rows}
         columnDefs={columnDefs}
         defaultColDef={{ sortable: true, resizable: true }}
+        domLayout={autoHeight ? "autoHeight" : "normal"}
         animateRows={false}
       />
     </div>
