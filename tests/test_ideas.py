@@ -26,10 +26,9 @@ def spread(net=1000.0, exec_edge=800.0, capital=10_000.0, buy_leg=None, sell_leg
         "capitalEmployed": capital,
         "grossEdgeDollars": net + 50,
         "carryCost": 50.0,
-        "buyQty": buy_qty,
-        "sellQty": sell_qty,
-        "buyLeg": buy_leg or leg(),
-        "sellLeg": sell_leg or leg(),
+        "structure": "buy_sell",
+        "leg1": {"side": "buy", "contract": "T Dec26 100c", "qty": buy_qty, "detail": buy_leg or leg()},
+        "leg2": {"side": "sell", "contract": "T Dec26 110c", "qty": sell_qty, "detail": sell_leg or leg()},
     }
 
 

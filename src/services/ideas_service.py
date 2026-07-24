@@ -58,9 +58,9 @@ def assess_spread(spread: dict, min_open_interest: float = 0.0) -> dict | None:
     if net is None or net <= 0:
         return None
 
-    legs = (
-        ("buy", spread["buyLeg"], spread.get("buyQty") or 0),
-        ("sell", spread["sellLeg"], spread.get("sellQty") or 0),
+    legs = tuple(
+        (leg["side"], leg["detail"], leg.get("qty") or 0)
+        for leg in (spread["leg1"], spread["leg2"])
     )
 
     # Hard floor: below this open interest there's effectively no market to
