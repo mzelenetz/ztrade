@@ -108,11 +108,17 @@ export interface VolSurfaceResponse {
 
 export type RateCurvePoint = [number, number] // [days, rate]
 
+export interface SpreadLeg {
+  side: "buy" | "sell"
+  contract: string
+  qty: number
+  detail: LegDetail
+}
+
 export interface Spread {
-  buy: string
-  sell: string
-  buyQty: number
-  sellQty: number
+  structure: "buy_sell" | "buy_buy" | "sell_sell"
+  leg1: SpreadLeg
+  leg2: SpreadLeg
   netDelta: number
   edge: number
   marginRequirement: number
@@ -122,8 +128,6 @@ export interface Spread {
   netEdgeDollars: number
   execEdgeDollars: number | null
   capitalEmployed: number
-  buyLeg: LegDetail
-  sellLeg: LegDetail
 }
 
 export interface Idea extends Spread {

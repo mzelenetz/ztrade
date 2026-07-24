@@ -1,11 +1,21 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { AgGridReact } from "ag-grid-react"
 import type { ColDef, ValueFormatterParams } from "ag-grid-community"
 import { useTheme } from "next-themes"
 import { gridThemeDark, gridThemeLight } from "@/lib/ag-grid-setup"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import type { Spread } from "@/types"
+import type { Spread, SpreadLeg } from "@/types"
 import { LegCard } from "@/components/LegCard"
+
+export const STRUCTURE_LABELS: Record<Spread["structure"], string> = {
+  buy_sell: "Buy–Sell",
+  buy_buy: "Buy–Buy",
+  sell_sell: "Sell–Sell",
+}
+
+export function legLabel(leg: SpreadLeg) {
+  return `${leg.side === "buy" ? "B" : "S"} ${leg.qty}× ${leg.contract}`
+}
 
 function fmtNum(digits = 2) {
   return (params: ValueFormatterParams) =>
@@ -17,10 +27,26 @@ function fmtDollars(params: ValueFormatterParams) {
 }
 
 const columnDefs: ColDef<Spread>[] = [
-  { field: "buy", headerName: "Buy", flex: 1, minWidth: 140 },
-  { field: "sell", headerName: "Sell", flex: 1, minWidth: 140 },
-  { field: "buyQty", headerName: "Buy Qty", width: 90 },
-  { field: "sellQty", headerName: "Sell Qty", width: 90 },
+  {
+    field: "structure",
+    headerName: "Structure",
+    width: 110,
+    valueFormatter: (p) => STRUCTURE_LABELS[p.value as Spread["structure"]] ?? "-",
+  },
+  {
+    colId: "leg1",
+    headerName: "Leg 1",
+    flex: 1,
+    minWidth: 170,
+    valueGetter: (p) => (p.data ? legLabel(p.data.leg1) : ""),
+  },
+  {
+    colId: "leg2",
+    headerName: "Leg 2",
+    flex: 1,
+    minWidth: 170,
+    valueGetter: (p) => (p.data ? legLabel(p.data.leg2) : ""),
+  },
   { field: "netDelta", headerName: "Net Delta", valueFormatter: fmtNum(3), width: 100 },
   { field: "edge", headerName: "Edge", valueFormatter: fmtNum(4), width: 90 },
   { field: "marginRequirement", headerName: "Margin $", valueFormatter: fmtDollars, width: 110 },
@@ -44,10 +70,18 @@ function Field({ label, value }: { label: string; value: string | number | null 
   )
 }
 
+const FILTERS = ["all", "buy_sell", "buy_buy", "sell_sell"] as const
+
 export function SpreadsView({ spreads, loading }: { spreads: Spread[]; loading: boolean }) {
   const { resolvedTheme } = useTheme()
   const theme = resolvedTheme === "dark" ? gridThemeDark : gridThemeLight
   const [selected, setSelected] = useState<Spread | null>(null)
+  const [structureFilter, setStructureFilter] = useState<(typeof FILTERS)[number]>("all")
+
+  const filtered = useMemo(
+    () => (structureFilter === "all" ? spreads : spreads.filter((s) => s.structure === structureFilter)),
+    [spreads, structureFilter],
+  )
 
   if (loading) {
     return <p className="text-sm text-muted-foreground">Loading spreads…</p>
@@ -59,10 +93,26 @@ export function SpreadsView({ spreads, loading }: { spreads: Spread[]; loading: 
 
   return (
     <div className="space-y-4">
-      <div style={{ height: Math.min(500, 42 + spreads.length * 36) }}>
+      <div className="flex gap-1">
+        {FILTERS.map((f) => (
+          <button
+            key={f}
+            onClick={() => setStructureFilter(f)}
+            className={`rounded-md px-3 py-1 text-sm ${
+              structureFilter === f
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {f === "all" ? "All" : STRUCTURE_LABELS[f]}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ height: Math.min(500, 42 + filtered.length * 36) }}>
         <AgGridReact
           theme={theme}
-          rowData={spreads}
+          rowData={filtered}
           columnDefs={columnDefs}
           defaultColDef={{ sortable: true, resizable: true }}
           rowSelection={{ mode: "singleRow" }}
@@ -85,8 +135,14 @@ export function SpreadsView({ spreads, loading }: { spreads: Spread[]; loading: 
             </CardContent>
           </Card>
           <div className="grid gap-4 lg:grid-cols-2">
-            <LegCard title="Leg 1 (Buy)" leg={selected.buyLeg} />
-            <LegCard title="Leg 2 (Sell)" leg={selected.sellLeg} />
+            <LegCard
+              title={`Leg 1 (${selected.leg1.side === "buy" ? "Buy" : "Sell"} ${selected.leg1.qty}×)`}
+              leg={selected.leg1.detail}
+            />
+            <LegCard
+              title={`Leg 2 (${selected.leg2.side === "buy" ? "Buy" : "Sell"} ${selected.leg2.qty}×)`}
+              leg={selected.leg2.detail}
+            />
           </div>
         </div>
       ) : (
