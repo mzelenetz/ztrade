@@ -82,20 +82,20 @@ def assess_spread(spread: dict, min_open_interest: float = 0.0) -> dict | None:
     for name, side, leg, qty in legs:
         rel = _leg_rel_spread(leg)
         if rel is None:
-            flags.append(f"{name} leg missing quotes")
+            flags.append(f"{name} missing quotes")
         elif rel > REL_SPREAD_SOFT_LIMIT:
-            flags.append(f"{name} leg market {rel:.0%} wide")
+            flags.append(f"{name} market {rel:.0%} wide")
 
         vol = leg.get("volume")
         if vol is not None and vol < MIN_LEG_VOLUME:
-            flags.append(f"{name} leg volume {int(vol)}")
+            flags.append(f"{name} volume {int(vol)}")
 
         if leg.get("volFromSurface") is False:
-            flags.append(f"{name} leg vol not from fitted surface")
+            flags.append(f"{name} vol not from fitted surface")
 
         capacity = leg_capacity(leg, side)
         if capacity is not None and qty > capacity:
-            flags.append(f"{name} leg fill: needs {qty}, capacity ~{capacity:.0f}")
+            flags.append(f"{name} fill: needs {qty}, capacity ~{capacity:.0f}")
             if capacity < qty / 2:
                 severe_fill_shortfall = True
 
