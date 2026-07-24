@@ -159,23 +159,137 @@ def run_build_spreads(margin_rate=0.10, margin_style="reg_t", **overrides):
     return build_spreads(spreads_df(), **kwargs)
 
 
+def _call_put_df(
+    call_last: float,
+    call_fmv: float,
+    put_last: float,
+    put_fmv: float,
+    call_delta: float = 0.50,
+    put_delta: float = -0.50,
+) -> pl.DataFrame:
+    """One call and one put, same strike/expiry, spot 100, T=0.5."""
+    expiry = datetime(2026, 12, 18, 16, 0)
+    lasts = [call_last, put_last]
+    return pl.DataFrame(
+        {
+            "Ticker": ["T", "T"],
+            "Expiry": [expiry, expiry],
+            "Type": ["C", "P"],
+            "Strike": [100.0, 100.0],
+            "Delta": [call_delta, put_delta],
+            "Last": lasts,
+            "FMV": [call_fmv, put_fmv],
+            "Bid": [v - 0.1 for v in lasts],
+            "Ask": [v + 0.1 for v in lasts],
+            "Mid": lasts,
+            "Spot": [100.0, 100.0],
+            "Vol30d": [0.25, 0.25],
+            "Rate": [0.05, 0.05],
+            "DividendYield": [0.0, 0.0],
+            "T": [0.5, 0.5],
+        }
+    )
+
+
+def _default_args(**overrides) -> dict:
+    args = dict(
+        metric_choice="Last",
+        delta_min=0,
+        delta_max=100,
+        max_contract_ratio=2.5,
+        max_straddle_ratio=1.5,
+        min_option_price=0.0,
+        max_last_price=1e9,
+        max_abs_net_delta=10.0,
+        max_legs_per_side=50,
+        max_results=50,
+        margin_rate=0.10,
+        margin_style="reg_t",
+    )
+    args.update(overrides)
+    return args
+
+
 class TestBuildSpreads:
     def test_pairing_and_delta_neutral_sizing(self):
         spreads = run_build_spreads()
         # (buy A, sell B) with both anchor variants; reverse pair has negative edge.
         assert len(spreads) == 2
         for s in spreads:
-            assert s["buy"].endswith("100c") and s["sell"].endswith("110c")
+            assert s["structure"] == "buy_sell"
+            assert s["leg1"]["side"] == "buy" and s["leg1"]["contract"].endswith("100c")
+            assert s["leg2"]["side"] == "sell" and s["leg2"]["contract"].endswith("110c")
             assert s["netDelta"] == pytest.approx(0.0)
             assert s["edge"] == pytest.approx(1.5)  # 1.0 − (−0.5)
 
-        by_anchor = {s["buyQty"]: s for s in spreads}
+        by_anchor = {s["leg1"]["qty"]: s for s in spreads}
         assert set(by_anchor) == {10, 5}
-        assert by_anchor[10]["sellQty"] == 20  # 0.50·10 / 0.25
-        assert by_anchor[5]["sellQty"] == 10
+        assert by_anchor[10]["leg2"]["qty"] == 20  # 0.50·10 / 0.25
+        assert by_anchor[5]["leg2"]["qty"] == 10
+
+    def test_mispriced_call_put_pair_is_not_a_buy_sell(self):
+        # Cheap call + rich put: same-sign-delta rule blocks buy/sell (it would be
+        # directional), buy_buy edge is negative, and sell_sell nets to zero gross
+        # dollars — so nothing qualifies.
+        assert build_spreads(
+            _call_put_df(call_last=10.0, call_fmv=20.0, put_last=20.0, put_fmv=10.0),
+            **_default_args(),
+        ) == []
+
+    def test_buy_buy_long_straddle_when_both_legs_cheap(self):
+        spreads = build_spreads(
+            _call_put_df(call_last=10.0, call_fmv=20.0, put_last=10.0, put_fmv=20.0),
+            **_default_args(),
+        )
+        assert len(spreads) == 1  # identical anchor variants deduplicate
+        s = spreads[0]
+        assert s["structure"] == "buy_buy"
+        assert s["leg1"]["side"] == "buy" and s["leg1"]["contract"].endswith("100c")
+        assert s["leg2"]["side"] == "buy" and s["leg2"]["contract"].endswith("100p")
+        assert s["leg1"]["qty"] == 10 and s["leg2"]["qty"] == 10
+        assert s["netDelta"] == pytest.approx(0.0)
+        assert s["edge"] == pytest.approx(1.0)  # 0.5 undervaluation per leg
+        # Fully paid: no margin, capital is the debit.
+        assert s["marginRequirement"] == 0.0
+        assert s["netDebit"] == pytest.approx(20_000)
+        assert s["capitalEmployed"] == pytest.approx(20_000)
+        assert s["grossEdgeDollars"] == pytest.approx(20_000)
+        # carry = 20,000 · 10% · 0.5y
+        assert s["carryCost"] == pytest.approx(1_000)
+        assert s["netEdgeDollars"] == pytest.approx(19_000)
+
+    def test_sell_sell_short_straddle_when_both_legs_rich(self):
+        spreads = build_spreads(
+            _call_put_df(call_last=20.0, call_fmv=10.0, put_last=20.0, put_fmv=10.0),
+            **_default_args(),
+        )
+        assert len(spreads) == 1
+        s = spreads[0]
+        assert s["structure"] == "sell_sell"
+        assert s["leg1"]["side"] == "sell" and s["leg2"]["side"] == "sell"
+        assert s["netDelta"] == pytest.approx(0.0)
+        assert s["edge"] == pytest.approx(2.0)
+        # Each naked leg: max(20% · 100, floor) + 20 = 40/share → 40,000 per 10 contracts.
+        # Pair rule: greater requirement + other leg premium = 40,000 + 20,000.
+        assert s["marginRequirement"] == pytest.approx(60_000)
+        assert s["netDebit"] == pytest.approx(-40_000)  # credit
+        # capital = (60,000 − 40,000 received) + 0
+        assert s["capitalEmployed"] == pytest.approx(20_000)
+        assert s["grossEdgeDollars"] == pytest.approx(20_000)
+        assert s["carryCost"] == pytest.approx(1_000)
+        assert s["netEdgeDollars"] == pytest.approx(19_000)
+
+    def test_straddle_ratio_cap_applies_to_buy_buy(self):
+        # Same strike/expiry call+put with 2:1 delta imbalance → qty ratio 2
+        # exceeds max_straddle_ratio 1.5 → excluded.
+        df = _call_put_df(
+            call_last=10.0, call_fmv=20.0, put_last=10.0, put_fmv=20.0,
+            call_delta=0.50, put_delta=-0.25,
+        )
+        assert build_spreads(df, **_default_args()) == []
 
     def test_reg_t_dollar_economics(self):
-        s = next(x for x in run_build_spreads() if x["buyQty"] == 10)
+        s = next(x for x in run_build_spreads() if x["leg1"]["qty"] == 10)
         # Reg T short leg: S=100, K=110 → max(20−10, 10)=10; +prem 20 → 30/share × 100 × 20
         assert s["marginRequirement"] == pytest.approx(30 * 100 * 20)
         # net debit: 10·100·10 − 20·100·20 = −30,000 (credit)
@@ -198,8 +312,8 @@ class TestBuildSpreads:
         assert vals == sorted(vals, reverse=True)
 
     def test_portfolio_margin_lower_than_reg_t_for_hedged_pair(self):
-        reg_t = next(x for x in run_build_spreads(margin_style="reg_t") if x["buyQty"] == 10)
-        pm = next(x for x in run_build_spreads(margin_style="portfolio") if x["buyQty"] == 10)
+        reg_t = next(x for x in run_build_spreads(margin_style="reg_t") if x["leg1"]["qty"] == 10)
+        pm = next(x for x in run_build_spreads(margin_style="portfolio") if x["leg1"]["qty"] == 10)
         # Long 10× 100-call hedges short 20× 110-call under stress → PM well below naked Reg T.
         assert pm["marginRequirement"] < reg_t["marginRequirement"]
         assert pm["carryCost"] < reg_t["carryCost"]

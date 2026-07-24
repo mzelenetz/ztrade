@@ -10,6 +10,7 @@ from src.services.margin_service import (
     MarginLeg,
     portfolio_margin_requirement,
     short_margin_requirement,
+    short_pair_margin_requirement,
 )
 
 
@@ -28,6 +29,220 @@ def _leg_detail(row: dict) -> dict:
         "strike": row["Strike"],
         "type": row["Type"],
         **summary,
+    }
+
+
+BASE_QTY = 10  # anchor quantity on one side
+MARGIN_SLACK = 3  # gross-edge-ranked candidates margined per requested result
+
+# structure → (side of leg 1, side of leg 2); +1 = buy, −1 = sell.
+# For buy_sell leg1 is the buy; for same-side structures leg1 is the call.
+STRUCTURES = {
+    "buy_sell": (1, -1),
+    "buy_buy": (1, 1),
+    "sell_sell": (-1, -1),
+}
+
+_PAIR_COLS = ["RowId", "%Overvalued", "Delta", "Last", "FMV", "Expiry", "Strike", "Type"]
+
+
+def _pair_frame(
+    a: pl.DataFrame,
+    b: pl.DataFrame,
+    structure: str,
+    max_contract_ratio: float,
+    max_straddle_ratio: float,
+    max_abs_net_delta: float,
+) -> pl.DataFrame | None:
+    """Cross-join two candidate pools and apply every cheap filter vectorized.
+
+    Columns *_1 come from `a`, *_2 from `b`. Survivors carry both anchor-quantity
+    variants (deduplicated), all caps applied, and positive edge both as a ratio
+    and in gross dollars."""
+    side1, side2 = STRUCTURES[structure]
+    if a.is_empty() or b.is_empty():
+        return None
+
+    pairs = (
+        a.select(_PAIR_COLS)
+        .rename({c: f"{c}_1" for c in _PAIR_COLS})
+        .join(
+            b.select(_PAIR_COLS).rename({c: f"{c}_2" for c in _PAIR_COLS}),
+            how="cross",
+        )
+        .filter(pl.col("RowId_1") != pl.col("RowId_2"))
+        .filter((pl.col("Delta_1") != 0) & (pl.col("Delta_2") != 0))
+        # Position deltas (side · option delta) must offset so the pair is a
+        # volatility spread rather than a directional bet.
+        .filter((side1 * pl.col("Delta_1")) * (side2 * pl.col("Delta_2")) < 0)
+    )
+    if pairs.is_empty():
+        return None
+
+    variants = []
+    for anchor in (1, 2):
+        anchored, balanced = ("1", "2") if anchor == 1 else ("2", "1")
+        qty_balanced = (
+            (pl.col(f"Delta_{anchored}").abs() * BASE_QTY / pl.col(f"Delta_{balanced}").abs())
+            .round(0)
+            .clip(lower_bound=1)
+            .cast(pl.Int64)
+        )
+        variants.append(
+            pairs.with_columns(
+                pl.lit(BASE_QTY, dtype=pl.Int64).alias(f"Qty_{anchored}"),
+                qty_balanced.alias(f"Qty_{balanced}"),
+            ).select(*pairs.columns, "Qty_1", "Qty_2")
+        )
+
+    is_straddle = (
+        (pl.col("Expiry_1") == pl.col("Expiry_2"))
+        & (pl.col("Strike_1") == pl.col("Strike_2"))
+        & (pl.col("Type_1") != pl.col("Type_2"))
+    )
+
+    return (
+        pl.concat(variants)
+        .unique(subset=["RowId_1", "RowId_2", "Qty_1", "Qty_2"])
+        .with_columns(
+            (
+                pl.max_horizontal("Qty_1", "Qty_2") / pl.min_horizontal("Qty_1", "Qty_2")
+            ).alias("ContractRatio"),
+            (
+                side1 * pl.col("Delta_1") * pl.col("Qty_1")
+                + side2 * pl.col("Delta_2") * pl.col("Qty_2")
+            ).alias("NetDelta"),
+            (
+                -side1 * pl.col("%Overvalued_1") - side2 * pl.col("%Overvalued_2")
+            ).alias("Edge"),
+            (
+                (
+                    side1 * (pl.col("FMV_1") - pl.col("Last_1")) * pl.col("Qty_1")
+                    + side2 * (pl.col("FMV_2") - pl.col("Last_2")) * pl.col("Qty_2")
+                )
+                * CONTRACT_MULTIPLIER
+            ).alias("GrossEdgeDollars"),
+        )
+        .filter(pl.col("ContractRatio") <= max_contract_ratio)
+        .filter(~is_straddle | (pl.col("ContractRatio") <= max_straddle_ratio))
+        .filter(pl.col("NetDelta").abs() <= max_abs_net_delta)
+        .filter(pl.col("Edge") > 0)
+        .filter(pl.col("GrossEdgeDollars") > 0)
+        .with_columns(pl.lit(structure).alias("Structure"))
+        .select(
+            "Structure", "RowId_1", "RowId_2", "Qty_1", "Qty_2",
+            "NetDelta", "Edge", "GrossEdgeDollars",
+        )
+    )
+
+
+def _price_candidate(
+    cand: dict, rows: dict[int, dict], margin_rate: float, margin_style: str
+) -> dict:
+    """Full economics (margin, carry, executable edge) for one surviving pair."""
+    structure = cand["Structure"]
+    sides = STRUCTURES[structure]
+    legs = [
+        (sides[0], rows[cand["RowId_1"]], int(cand["Qty_1"])),
+        (sides[1], rows[cand["RowId_2"]], int(cand["Qty_2"])),
+    ]
+
+    net_debit = sum(
+        side * float(leg["Last"]) * CONTRACT_MULTIPLIER * qty for side, leg, qty in legs
+    )
+    premium_received = sum(
+        float(leg["Last"]) * CONTRACT_MULTIPLIER * qty for side, leg, qty in legs if side < 0
+    )
+
+    if structure == "buy_buy":
+        # Fully paid position: no requirement, capital is the debit itself.
+        margin_requirement = 0.0
+        capital = max(net_debit, 0.0)
+    elif margin_style == "portfolio":
+        margin_requirement = portfolio_margin_requirement(
+            [
+                {
+                    "spot": float(leg["Spot"]),
+                    "strike": float(leg["Strike"]),
+                    "type": leg["Type"],
+                    "qty": qty,
+                    "side": side,
+                    "vol": float(leg["Vol30d"]),
+                    "rate": float(leg["Rate"]),
+                    "dividend": float(leg["DividendYield"]),
+                    "tenor": float(leg["T"]),
+                }
+                for side, leg, qty in legs
+            ]
+        )
+        # PM requirement is a pure worst-case loss (no premium component).
+        capital = margin_requirement + max(net_debit, 0.0)
+    else:
+        shorts = [
+            {
+                "spot": float(leg["Spot"]),
+                "strike": float(leg["Strike"]),
+                "type": leg["Type"],
+                "premium": float(leg["Last"]),
+                "qty": qty,
+            }
+            for side, leg, qty in legs
+            if side < 0
+        ]
+        if len(shorts) == 2:
+            margin_requirement = short_pair_margin_requirement(shorts)
+        else:
+            margin_requirement = short_margin_requirement(
+                spot=shorts[0]["spot"],
+                strike=shorts[0]["strike"],
+                opt_type=shorts[0]["type"],
+                premium=shorts[0]["premium"],
+                qty=shorts[0]["qty"],
+            )
+        # The premium-received component of the Reg T requirement is
+        # self-funding, and a net credit doesn't reduce the margin held.
+        capital = (margin_requirement - premium_received) + max(net_debit, 0.0)
+
+    holding_years = min(float(leg["T"]) for _, leg, _ in legs)
+    carry_cost = capital * margin_rate * holding_years
+
+    gross_edge_dollars = float(cand["GrossEdgeDollars"])
+    net_edge_dollars = gross_edge_dollars - carry_cost
+
+    # Executable edge: what survives crossing the spread — buys fill at the ask,
+    # sells at the bid. Edge that only exists at mid/last quotes is often phantom.
+    exec_edge_dollars = None
+    exec_prices = [leg.get("Ask") if side > 0 else leg.get("Bid") for side, leg, _ in legs]
+    if all(p is not None and p > 0 for p in exec_prices):
+        exec_edge_dollars = (
+            sum(
+                side * (float(leg["FMV"]) - float(price)) * CONTRACT_MULTIPLIER * qty
+                for (side, leg, qty), price in zip(legs, exec_prices)
+            )
+            - carry_cost
+        )
+
+    def leg_payload(side: int, leg: dict, qty: int) -> dict:
+        return {
+            "side": "buy" if side > 0 else "sell",
+            "contract": format_contract(leg["Ticker"], leg["Expiry"], leg["Strike"], leg["Type"]),
+            "qty": qty,
+            "detail": _leg_detail(leg),
+        }
+
+    return {
+        "structure": structure,
+        "leg1": leg_payload(*legs[0]),
+        "leg2": leg_payload(*legs[1]),
+        "netDelta": float(cand["NetDelta"]),
+        "edge": float(cand["Edge"]),
+        "marginRequirement": margin_requirement,
+        "netDebit": net_debit,
+        "carryCost": carry_cost,
+        "grossEdgeDollars": gross_edge_dollars,
+        "netEdgeDollars": net_edge_dollars,
+        "execEdgeDollars": exec_edge_dollars,
+        "capitalEmployed": capital,
     }
 
 
@@ -52,142 +267,46 @@ def build_spreads(
         )
         .filter(pl.col("Last") <= max_last_price)
         .filter(pl.col("%Overvalued").is_not_null())
+        .sort("%Overvalued")
+        .with_row_index("RowId")
     )
-
     if sdf.is_empty():
         return []
 
-    sorted_legs = sdf.sort("%Overvalued")
-    buys = sorted_legs.head(max_legs_per_side)
-    sells = sorted_legs.tail(max_legs_per_side)
+    # Edge is additive per leg, so the best combos can only come from the best
+    # individual legs: top-K pools per (role, type). sdf is sorted ascending by
+    # %Overvalued → head = most undervalued, tail = most overvalued.
+    k = max_legs_per_side
+    is_call = pl.col("Type") == "C"
+    frames = [
+        _pair_frame(
+            sdf.head(k), sdf.tail(k), "buy_sell",
+            max_contract_ratio, max_straddle_ratio, max_abs_net_delta,
+        ),
+        _pair_frame(
+            sdf.filter(is_call).head(k), sdf.filter(~is_call).head(k), "buy_buy",
+            max_contract_ratio, max_straddle_ratio, max_abs_net_delta,
+        ),
+        _pair_frame(
+            sdf.filter(is_call).tail(k), sdf.filter(~is_call).tail(k), "sell_sell",
+            max_contract_ratio, max_straddle_ratio, max_abs_net_delta,
+        ),
+    ]
+    frames = [f for f in frames if f is not None and not f.is_empty()]
+    if not frames:
+        return []
 
-    spreads = []
-    base_qty = 10  # anchor quantity on one side
+    # Margin/carry is the expensive part: run it only on the strongest
+    # candidates by gross edge, with slack because carry can reorder them.
+    candidates = (
+        pl.concat(frames)
+        .sort("GrossEdgeDollars", descending=True)
+        .head(MARGIN_SLACK * max_results)
+    )
 
-    for buy in buys.to_dicts():
-        buy_delta = float(buy["Delta"])
-        if buy_delta == 0:
-            continue
-
-        for sell in sells.to_dicts():
-            if (
-                buy["Expiry"] == sell["Expiry"]
-                and buy["Strike"] == sell["Strike"]
-                and buy["Type"] == sell["Type"]
-            ):
-                continue
-
-            sell_delta = float(sell["Delta"])
-            if sell_delta == 0:
-                continue
-
-            def maybe_add_spread(anchor_buy: bool):
-                if anchor_buy:
-                    buy_qty = base_qty
-                    sell_qty = max(1, int(round(abs(buy_delta) * buy_qty / abs(sell_delta))))
-                else:
-                    sell_qty = base_qty
-                    buy_qty = max(1, int(round(abs(sell_delta) * sell_qty / abs(buy_delta))))
-
-                if sell_qty <= 0 or buy_qty <= 0:
-                    return
-
-                contract_ratio = max(buy_qty, sell_qty) / min(buy_qty, sell_qty)
-                if contract_ratio > max_contract_ratio:
-                    return
-
-                is_straddle = (
-                    buy["Expiry"] == sell["Expiry"]
-                    and buy["Strike"] == sell["Strike"]
-                    and buy["Type"] != sell["Type"]
-                )
-                if is_straddle and contract_ratio > max_straddle_ratio:
-                    return
-
-                net_delta = buy_delta * buy_qty - sell_delta * sell_qty
-                if abs(net_delta) > max_abs_net_delta:
-                    return
-
-                edge = float(sell["%Overvalued"]) - float(buy["%Overvalued"])
-                if edge <= 0:
-                    return
-
-                sell_premium = float(sell["Last"]) * CONTRACT_MULTIPLIER * sell_qty
-                buy_premium = float(buy["Last"]) * CONTRACT_MULTIPLIER * buy_qty
-                net_debit = buy_premium - sell_premium
-
-                if margin_style == "portfolio":
-                    legs: list[MarginLeg] = [
-                        {
-                            "spot": float(leg["Spot"]),
-                            "strike": float(leg["Strike"]),
-                            "type": leg["Type"],
-                            "qty": qty,
-                            "side": side,
-                            "vol": float(leg["Vol30d"]),
-                            "rate": float(leg["Rate"]),
-                            "dividend": float(leg["DividendYield"]),
-                            "tenor": float(leg["T"]),
-                        }
-                        for leg, qty, side in ((buy, buy_qty, 1), (sell, sell_qty, -1))
-                    ]
-                    margin_requirement = portfolio_margin_requirement(legs)
-                    # PM requirement is a pure worst-case loss (no premium component).
-                    capital = margin_requirement + max(net_debit, 0.0)
-                else:
-                    margin_requirement = short_margin_requirement(
-                        spot=float(sell["Spot"]),
-                        strike=float(sell["Strike"]),
-                        opt_type=sell["Type"],
-                        premium=float(sell["Last"]),
-                        qty=sell_qty,
-                    )
-                    # The premium-received component of the Reg T requirement is
-                    # self-funding, and a net credit doesn't reduce the margin held.
-                    capital = (margin_requirement - sell_premium) + max(net_debit, 0.0)
-
-                holding_years = min(float(buy["T"]), float(sell["T"]))
-                carry_cost = capital * margin_rate * holding_years
-
-                gross_edge_dollars = (
-                    (float(sell["Last"]) - float(sell["FMV"])) * CONTRACT_MULTIPLIER * sell_qty
-                    + (float(buy["FMV"]) - float(buy["Last"])) * CONTRACT_MULTIPLIER * buy_qty
-                )
-                net_edge_dollars = gross_edge_dollars - carry_cost
-
-                # Executable edge: what survives crossing the spread — sell the
-                # rich leg at its bid, buy the cheap leg at its ask. Edge that
-                # only exists at mid/last quotes is often phantom.
-                exec_edge_dollars = None
-                sell_bid, buy_ask = sell.get("Bid"), buy.get("Ask")
-                if sell_bid is not None and buy_ask is not None and sell_bid > 0 and buy_ask > 0:
-                    exec_edge_dollars = (
-                        (float(sell_bid) - float(sell["FMV"])) * CONTRACT_MULTIPLIER * sell_qty
-                        + (float(buy["FMV"]) - float(buy_ask)) * CONTRACT_MULTIPLIER * buy_qty
-                        - carry_cost
-                    )
-
-                spreads.append(
-                    {
-                        "buy": format_contract(buy["Ticker"], buy["Expiry"], buy["Strike"], buy["Type"]),
-                        "sell": format_contract(sell["Ticker"], sell["Expiry"], sell["Strike"], sell["Type"]),
-                        "buyQty": buy_qty,
-                        "sellQty": sell_qty,
-                        "netDelta": net_delta,
-                        "edge": edge,
-                        "marginRequirement": margin_requirement,
-                        "netDebit": net_debit,
-                        "carryCost": carry_cost,
-                        "grossEdgeDollars": gross_edge_dollars,
-                        "netEdgeDollars": net_edge_dollars,
-                        "execEdgeDollars": exec_edge_dollars,
-                        "capitalEmployed": capital,
-                        "buyLeg": _leg_detail(buy),
-                        "sellLeg": _leg_detail(sell),
-                    }
-                )
-
-            maybe_add_spread(anchor_buy=True)
-            maybe_add_spread(anchor_buy=False)
-
+    rows = {r["RowId"]: r for r in sdf.to_dicts()}
+    spreads = [
+        _price_candidate(cand, rows, margin_rate, margin_style)
+        for cand in candidates.to_dicts()
+    ]
     return sorted(spreads, key=lambda r: r["netEdgeDollars"], reverse=True)[:max_results]
