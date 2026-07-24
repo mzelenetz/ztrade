@@ -8,6 +8,7 @@ from src.services.margin_service import (
     bs_price,
     portfolio_margin_requirement,
     short_margin_requirement,
+    short_pair_margin_requirement,
 )
 
 
@@ -106,3 +107,21 @@ class TestBsPrice:
     def test_zero_tenor_returns_intrinsic(self):
         assert bs_price(110, 100, 0.05, 0.0, 0.25, 0.0, "C") == pytest.approx(10.0)
         assert bs_price(110, 100, 0.05, 0.0, 0.25, 0.0, "P") == pytest.approx(0.0)
+
+
+class TestShortPairMargin:
+    def test_greater_requirement_plus_other_premium(self):
+        # Call: spot 100, strike 110 → max(20−10, 10) + 5 = 15/share → 15,000 for 10 contracts.
+        # Put: strike 100 → max(20, 10) + 20 = 40/share → 40,000 for 10 contracts.
+        call = {"spot": 100.0, "strike": 110.0, "type": "C", "premium": 5.0, "qty": 10}
+        put = {"spot": 100.0, "strike": 100.0, "type": "P", "premium": 20.0, "qty": 10}
+        # Put side dominates: 40,000 + call premium dollars (5 · 100 · 10 = 5,000).
+        assert short_pair_margin_requirement([call, put]) == pytest.approx(45_000)
+        # Order must not matter.
+        assert short_pair_margin_requirement([put, call]) == pytest.approx(45_000)
+
+    def test_symmetric_legs(self):
+        # Identical requirements both sides: 40/share → 40,000; + other premium 20,000.
+        call = {"spot": 100.0, "strike": 100.0, "type": "C", "premium": 20.0, "qty": 10}
+        put = {"spot": 100.0, "strike": 100.0, "type": "P", "premium": 20.0, "qty": 10}
+        assert short_pair_margin_requirement([call, put]) == pytest.approx(60_000)

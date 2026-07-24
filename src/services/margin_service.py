@@ -106,3 +106,23 @@ def portfolio_margin_requirement(
 
     short_contracts = sum(leg["qty"] for leg in legs if leg["side"] < 0)
     return max(worst_loss, min_per_short_contract * short_contracts)
+
+
+def short_pair_margin_requirement(legs: list[dict]) -> float:
+    """Reg T requirement for two naked short legs (short straddle/strangle):
+    the greater leg's naked requirement plus the current premium of the other
+    leg. Each leg: {spot, strike, type, premium, qty}."""
+    reqs = [
+        short_margin_requirement(
+            spot=leg["spot"],
+            strike=leg["strike"],
+            opt_type=leg["type"],
+            premium=leg["premium"],
+            qty=leg["qty"],
+        )
+        for leg in legs
+    ]
+    premiums = [leg["premium"] * CONTRACT_MULTIPLIER * leg["qty"] for leg in legs]
+    if reqs[0] >= reqs[1]:
+        return reqs[0] + premiums[1]
+    return reqs[1] + premiums[0]
