@@ -169,68 +169,96 @@ export function MethodologyPage() {
         </Section>
 
         <Section title="Spread construction">
-          <p>The Spreads tab searches for two-legged ideas as follows:</p>
+          <p>The Spreads tab searches for two-legged ideas in three structures:</p>
+          <ul className="list-disc space-y-2 pl-5">
+            <li>
+              <strong>Buy–Sell</strong> — one long, one short, both the same type (call or put):
+              buy the cheap contract, sell the rich one.
+            </li>
+            <li>
+              <strong>Buy–Buy</strong> — a long call and a long put, both cheap: a long
+              straddle-style position when the market underprices both sides at once.
+            </li>
+            <li>
+              <strong>Sell–Sell</strong> — a short call and a short put, both rich: the mirror
+              image, when the market overprices both sides at once.
+            </li>
+          </ul>
+          <p>All three are built the same way:</p>
           <ul className="list-disc space-y-2 pl-5">
             <li>
               All contracts are filtered by your call-delta band and price limits, then ranked by
               %Overvalued. The cheapest contracts become <strong>buy candidates</strong>; the richest
-              become <strong>sell candidates</strong> (up to "max legs per side" of each).
+              become <strong>sell candidates</strong> (up to "max legs per side" of each), split by
+              type so calls and puts are each searched on their own terms.
             </li>
             <li>
-              Every buy/sell pairing is sized for <strong>delta neutrality</strong>: one side is
-              anchored at 10 contracts and the other side's quantity is set so the position's net
-              delta is as close to zero as whole contracts allow. Pairings whose contract ratio,
-              net delta, or straddle ratio exceed your limits are discarded.
+              Every pairing is <strong>delta-offsetting</strong>: one side is anchored at 10
+              contracts and the other side's quantity is balanced so the position's net delta is as
+              close to zero as whole contracts allow. Pairings whose contract ratio, net delta, or
+              straddle ratio exceed your limits are discarded.
             </li>
             <li>
-              <strong>Edge (%)</strong> is the sell leg's %Overvalued minus the buy leg's
-              %Overvalued — the total mispricing you're capturing per unit of premium. Only
-              positive-edge pairs are kept.
+              <strong>Edge (%)</strong> is the total mispricing you're capturing per unit of
+              premium — the rich leg's (or legs') %Overvalued minus the cheap leg's (or legs').
+              Only positive-edge pairs are kept.
             </li>
             <li>
               Ideas are ranked by <strong>Net Edge $</strong> (below), not by the raw percentage.
             </li>
           </ul>
           <p>
-            Note the search is deliberately unconstrained about structure: a pairing can be a
-            vertical, a calendar, a diagonal, or a call/put pair. It's a mispricing screen, not a
-            strategy template.
+            Note the search is deliberately unconstrained about structure within each of these
+            three shapes: a Buy–Sell pairing can be a vertical, a calendar, a diagonal, or any
+            same-type pair. It's a mispricing screen, not a strategy template.
           </p>
         </Section>
 
         <Section title="Cost of capital and margin">
           <p>
-            Capturing edge isn't free: the short leg ties up margin and the long leg costs premium.
-            The tool estimates that capital and charges it at your margin rate for the expected life
-            of the position, so ideas are ranked by what's left after financing.
+            Capturing edge isn't free: a short leg ties up margin and a long leg costs premium. The
+            tool estimates that capital and charges it at your margin rate for the expected life of
+            the position, so ideas are ranked by what's left after financing. How that capital is
+            computed depends on the structure.
           </p>
           <ul className="list-disc space-y-2 pl-5">
             <li>
-              <strong>Margin $</strong> — computed per the margin type you select in the sidebar:
+              <strong>Margin $</strong> — computed per the margin type you select in the sidebar,
+              and per structure:
               <ul className="mt-2 list-[circle] space-y-2 pl-5">
                 <li>
-                  <strong>Reg T</strong> — the short leg is margined as a naked short (Fidelity's
-                  standard formula): the greater of 20% of the underlying minus the
+                  <strong>Buy–Buy (long/long)</strong> — both legs are fully paid, so there's no
+                  margin requirement in either mode; capital employed is simply the net debit.
+                </li>
+                <li>
+                  <strong>Buy–Sell, Reg T</strong> — the short leg is margined as a naked short
+                  (Fidelity's standard formula): the greater of 20% of the underlying minus the
                   out-of-the-money amount, or 10% of the underlying (calls) / 10% of the strike
                   (puts), plus the premium received — per contract, times quantity. The long leg is
                   not offset. This is the conservative ceiling.
                 </li>
                 <li>
+                  <strong>Sell–Sell, Reg T</strong> — both legs are short, so Reg T applies the
+                  short-straddle/strangle rule: the greater leg's naked requirement (above) plus the
+                  current premium of the other short leg.
+                </li>
+                <li>
                   <strong>Portfolio margin</strong> — risk-based, the way PM accounts are actually
                   margined (TIMS-style): both legs are repriced together at eleven underlying
                   scenarios from −15% to +15%, and the requirement is the worst-case loss of the
-                  combined position, with a $37.50-per-short-contract minimum. Because the long leg
-                  hedges the short under stress, PM requirements for spreads are usually far lower
+                  combined position, with a $37.50-per-short-contract minimum. For Buy–Sell, because
+                  the long leg hedges the short under stress, PM requirements are usually far lower
                   than Reg T — meaning less capital, less carry, and better net edge.
                 </li>
               </ul>
             </li>
             <li>
-              <strong>Net Debit $</strong> — long premium paid minus short premium received. Negative
-              means the position is put on for a net credit.
+              <strong>Net Debit $</strong> — total premium paid minus total premium received across
+              both legs. Negative means the position is put on for a net credit.
             </li>
             <li>
-              <strong>Capital employed</strong> — under Reg T: the margin requirement excluding the
+              <strong>Capital employed</strong> — for Buy–Buy: the net debit itself, no margin. For
+              Buy–Sell and Sell–Sell under Reg T: the margin requirement excluding the
               premium-received portion (that part is funded by the sale itself), plus any net debit
               paid. Under portfolio margin: the full requirement plus any net debit (the PM
               requirement is a pure worst-case loss with no premium component). A net credit does
@@ -241,8 +269,9 @@ export function MethodologyPage() {
               nearer of the two legs' expiries.
             </li>
             <li>
-              <strong>Gross Edge $</strong> — the dollar mispricing across both legs: (short price −
-              short FMV) plus (long FMV − long price), each times 100 × quantity.
+              <strong>Gross Edge $</strong> — the dollar mispricing across both legs: for each leg,
+              (sell price − sell FMV) or (buy FMV − buy price) as applicable, each times 100 ×
+              quantity, summed.
             </li>
             <li>
               <strong>Net Edge $</strong> — Gross Edge $ minus Carry $. This is the ranking metric.

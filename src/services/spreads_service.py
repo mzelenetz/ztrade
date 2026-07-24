@@ -7,7 +7,6 @@ from src.services.chain_service import compute_overvalued, filter_by_delta_and_p
 
 from src.services.margin_service import (
     CONTRACT_MULTIPLIER,
-    MarginLeg,
     portfolio_margin_requirement,
     short_margin_requirement,
     short_pair_margin_requirement,
@@ -103,7 +102,7 @@ def _pair_frame(
 
     return (
         pl.concat(variants)
-        .unique(subset=["RowId_1", "RowId_2", "Qty_1", "Qty_2"])
+        .unique(subset=["RowId_1", "RowId_2", "Qty_1", "Qty_2"], maintain_order=True)
         .with_columns(
             (
                 pl.max_horizontal("Qty_1", "Qty_2") / pl.min_horizontal("Qty_1", "Qty_2")
@@ -278,17 +277,25 @@ def build_spreads(
     # %Overvalued → head = most undervalued, tail = most overvalued.
     k = max_legs_per_side
     is_call = pl.col("Type") == "C"
+    calls, puts = sdf.filter(is_call), sdf.filter(~is_call)
     frames = [
+        # buy_sell must stay per-type: _pair_frame's delta-offset filter only
+        # lets same-type pairs survive, so any-type pools would miss same-type
+        # pairs that fall just outside a mixed-type top-K.
         _pair_frame(
-            sdf.head(k), sdf.tail(k), "buy_sell",
+            calls.head(k), calls.tail(k), "buy_sell",
             max_contract_ratio, max_straddle_ratio, max_abs_net_delta,
         ),
         _pair_frame(
-            sdf.filter(is_call).head(k), sdf.filter(~is_call).head(k), "buy_buy",
+            puts.head(k), puts.tail(k), "buy_sell",
             max_contract_ratio, max_straddle_ratio, max_abs_net_delta,
         ),
         _pair_frame(
-            sdf.filter(is_call).tail(k), sdf.filter(~is_call).tail(k), "sell_sell",
+            calls.head(k), puts.head(k), "buy_buy",
+            max_contract_ratio, max_straddle_ratio, max_abs_net_delta,
+        ),
+        _pair_frame(
+            calls.tail(k), puts.tail(k), "sell_sell",
             max_contract_ratio, max_straddle_ratio, max_abs_net_delta,
         ),
     ]
@@ -300,7 +307,10 @@ def build_spreads(
     # candidates by gross edge, with slack because carry can reorder them.
     candidates = (
         pl.concat(frames)
-        .sort("GrossEdgeDollars", descending=True)
+        .sort(
+            ["GrossEdgeDollars", "RowId_1", "RowId_2"],
+            descending=[True, False, False],
+        )
         .head(MARGIN_SLACK * max_results)
     )
 

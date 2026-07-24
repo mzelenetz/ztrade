@@ -97,7 +97,10 @@ export function SpreadsView({ spreads, loading }: { spreads: Spread[]; loading: 
         {FILTERS.map((f) => (
           <button
             key={f}
-            onClick={() => setStructureFilter(f)}
+            onClick={() => {
+              if (f !== structureFilter) setSelected(null)
+              setStructureFilter(f)
+            }}
             className={`rounded-md px-3 py-1 text-sm ${
               structureFilter === f
                 ? "bg-primary text-primary-foreground"

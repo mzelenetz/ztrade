@@ -227,6 +227,52 @@ class TestBuildSpreads:
         assert by_anchor[10]["leg2"]["qty"] == 20  # 0.50·10 / 0.25
         assert by_anchor[5]["leg2"]["qty"] == 10
 
+    def test_buy_sell_per_type_buckets_on_skewed_chain(self):
+        # Skewed chain: the single most-undervalued contract overall is a call
+        # and the single most-overvalued is a put, so with max_legs_per_side=1
+        # an any-type top-K pool would contain only that call (head) and that
+        # put (tail) — a cross-type pair, which the delta-offset filter always
+        # rejects for buy_sell. Per-type buckets must still surface the cheap
+        # call/rich call pair and the cheap put/rich put pair.
+        expiry = datetime(2026, 12, 18, 16, 0)
+        rows = [
+            # name, type, strike, delta, last, fmv, %overvalued
+            ("A", "C", 100.0, 0.50, 10.0, 20.0),   # cheap call, -50% (reuses spreads_df shape)
+            ("B", "C", 110.0, 0.25, 20.0, 10.0),   # rich call, +100% (reuses spreads_df shape)
+            ("C", "P", 100.0, -0.50, 12.0, 15.0),  # cheap put, -20% (not as cheap as A)
+            ("D", "P", 90.0, -0.25, 25.0, 10.0),   # rich put, +150% (richer than B)
+        ]
+        n = len(rows)
+        df = pl.DataFrame(
+            {
+                "Ticker": ["T"] * n,
+                "Expiry": [expiry] * n,
+                "Type": [r[1] for r in rows],
+                "Strike": [r[2] for r in rows],
+                "Delta": [r[3] for r in rows],
+                "Last": [r[4] for r in rows],
+                "FMV": [r[5] for r in rows],
+                "Bid": [r[4] - 0.1 for r in rows],
+                "Ask": [r[4] + 0.1 for r in rows],
+                "Mid": [r[4] for r in rows],
+                "Spot": [100.0] * n,
+                "Vol30d": [0.25] * n,
+                "Rate": [0.05] * n,
+                "DividendYield": [0.0] * n,
+                "T": [0.5] * n,
+            }
+        )
+        spreads = build_spreads(df, **_default_args(max_legs_per_side=1))
+        buy_sell = [s for s in spreads if s["structure"] == "buy_sell"]
+        assert any(
+            s["leg1"]["contract"].endswith("c") and s["leg2"]["contract"].endswith("c")
+            for s in buy_sell
+        )
+        assert any(
+            s["leg1"]["contract"].endswith("p") and s["leg2"]["contract"].endswith("p")
+            for s in buy_sell
+        )
+
     def test_mispriced_call_put_pair_is_not_a_buy_sell(self):
         # Cheap call + rich put: same-sign-delta rule blocks buy/sell (it would be
         # directional), buy_buy edge is negative, and sell_sell nets to zero gross
@@ -320,6 +366,30 @@ class TestBuildSpreads:
         assert pm["netEdgeDollars"] > reg_t["netEdgeDollars"]
         # PM capital (net credit) = requirement → carry = req · rate · T
         assert pm["carryCost"] == pytest.approx(pm["marginRequirement"] * 0.10 * 0.5)
+
+    def test_sell_sell_portfolio_margin_positive_requirement(self):
+        spreads = build_spreads(
+            _call_put_df(call_last=20.0, call_fmv=10.0, put_last=20.0, put_fmv=10.0),
+            **_default_args(margin_style="portfolio"),
+        )
+        assert len(spreads) == 1
+        s = spreads[0]
+        assert s["structure"] == "sell_sell"
+        assert s["marginRequirement"] > 0
+        # PM capital = requirement since net debit is a credit (negative).
+        assert s["capitalEmployed"] == pytest.approx(s["marginRequirement"] + 0)
+
+    def test_buy_buy_portfolio_margin_still_zero(self):
+        spreads = build_spreads(
+            _call_put_df(call_last=10.0, call_fmv=20.0, put_last=10.0, put_fmv=20.0),
+            **_default_args(margin_style="portfolio"),
+        )
+        assert len(spreads) == 1
+        s = spreads[0]
+        assert s["structure"] == "buy_buy"
+        # buy_buy is special-cased before the portfolio-margin branch.
+        assert s["marginRequirement"] == 0.0
+        assert s["capitalEmployed"] == pytest.approx(s["netDebit"])
 
     def test_net_delta_filter_excludes(self):
         assert run_build_spreads(max_abs_net_delta=0.0) != []  # netDelta is exactly 0 here

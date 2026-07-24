@@ -59,14 +59,14 @@ def assess_spread(spread: dict, min_open_interest: float = 0.0) -> dict | None:
         return None
 
     legs = tuple(
-        (leg["side"], leg["detail"], leg.get("qty") or 0)
-        for leg in (spread["leg1"], spread["leg2"])
+        (f"leg {i} ({leg['side']})", leg["side"], leg["detail"], leg.get("qty") or 0)
+        for i, leg in enumerate((spread["leg1"], spread["leg2"]), start=1)
     )
 
     # Hard floor: below this open interest there's effectively no market to
     # put the position on, regardless of what the quotes claim.
     if min_open_interest > 0:
-        for _, leg, _ in legs:
+        for _, _, leg, _ in legs:
             oi = leg.get("openInterest")
             if oi is not None and oi < min_open_interest:
                 return None
@@ -79,7 +79,7 @@ def assess_spread(spread: dict, min_open_interest: float = 0.0) -> dict | None:
     elif exec_edge <= 0:
         flags.append("edge does not survive bid/ask cross")
 
-    for name, leg, qty in legs:
+    for name, side, leg, qty in legs:
         rel = _leg_rel_spread(leg)
         if rel is None:
             flags.append(f"{name} leg missing quotes")
@@ -93,7 +93,7 @@ def assess_spread(spread: dict, min_open_interest: float = 0.0) -> dict | None:
         if leg.get("volFromSurface") is False:
             flags.append(f"{name} leg vol not from fitted surface")
 
-        capacity = leg_capacity(leg, name)
+        capacity = leg_capacity(leg, side)
         if capacity is not None and qty > capacity:
             flags.append(f"{name} leg fill: needs {qty}, capacity ~{capacity:.0f}")
             if capacity < qty / 2:
