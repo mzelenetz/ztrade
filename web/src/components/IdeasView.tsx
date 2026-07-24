@@ -5,6 +5,7 @@ import type { Idea } from "@/types"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { LegCard } from "@/components/LegCard"
+import { legLabel, STRUCTURE_LABELS } from "@/components/SpreadsView"
 
 function dollars(value: number | null | undefined) {
   if (value === null || value === undefined) return "–"
@@ -30,10 +31,26 @@ const columnDefs: ColDef<Idea>[] = [
       p.value ? <ConfidenceBadge value={p.value} /> : null,
   },
   { field: "ticker", headerName: "Ticker", width: 90 },
-  { field: "buy", headerName: "Buy", flex: 1, minWidth: 150 },
-  { field: "sell", headerName: "Sell", flex: 1, minWidth: 150 },
-  { field: "buyQty", headerName: "Buy Qty", width: 90 },
-  { field: "sellQty", headerName: "Sell Qty", width: 90 },
+  {
+    field: "structure",
+    headerName: "Structure",
+    width: 110,
+    valueFormatter: (p) => STRUCTURE_LABELS[p.value as Idea["structure"]] ?? "-",
+  },
+  {
+    colId: "leg1",
+    headerName: "Leg 1",
+    flex: 1,
+    minWidth: 170,
+    valueGetter: (p) => (p.data ? legLabel(p.data.leg1) : ""),
+  },
+  {
+    colId: "leg2",
+    headerName: "Leg 2",
+    flex: 1,
+    minWidth: 170,
+    valueGetter: (p) => (p.data ? legLabel(p.data.leg2) : ""),
+  },
   { field: "execEdgeDollars", headerName: "Exec Edge $", valueFormatter: fmtDollars, width: 120 },
   { field: "netEdgeDollars", headerName: "Net Edge $", valueFormatter: fmtDollars, width: 115 },
   { field: "capitalEmployed", headerName: "Capital $", valueFormatter: fmtDollars, width: 110 },
@@ -70,9 +87,10 @@ export function IdeasView({ ideas, loading }: { ideas: Idea[]; loading: boolean 
       <p className="text-sm text-muted-foreground">
         Top {ideas.length} spreads across the universe, ranked by confidence then{" "}
         <strong className="text-foreground">executable edge</strong> — the profit left after
-        selling the rich leg at its bid, buying the cheap leg at its ask, and paying carry. High
-        confidence = the edge survives realistic fills on tight, traded markets, priced off the
-        fitted surface.
+        filling buys at the ask, sells at the bid, and paying carry. Every structure pairs legs
+        whose position deltas offset, isolating relative volatility rather than adding call/put
+        delta exposure. High confidence = the edge survives realistic fills on tight, traded
+        markets, priced off the fitted surface.
       </p>
 
       <div className="ag-theme-quartz w-full" style={{ height: 560 }}>
@@ -89,8 +107,7 @@ export function IdeasView({ ideas, loading }: { ideas: Idea[]; loading: boolean 
         <Card>
           <CardHeader>
             <CardTitle className="text-base">
-              {selected.ticker}: buy {selected.buyQty}× {selected.buy}, sell {selected.sellQty}×{" "}
-              {selected.sell}
+              {selected.ticker}: {legLabel(selected.leg1)}, {legLabel(selected.leg2)}
             </CardTitle>
           </CardHeader>
           <CardContent className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
@@ -126,8 +143,14 @@ export function IdeasView({ ideas, loading }: { ideas: Idea[]; loading: boolean 
 
       {selected && (
         <div className="grid gap-4 lg:grid-cols-2">
-          <LegCard title={`Buy ${selected.buyQty}×`} leg={selected.buyLeg} />
-          <LegCard title={`Sell ${selected.sellQty}×`} leg={selected.sellLeg} />
+          <LegCard
+            title={`${selected.leg1.side === "buy" ? "Buy" : "Sell"} ${selected.leg1.qty}×`}
+            leg={selected.leg1.detail}
+          />
+          <LegCard
+            title={`${selected.leg2.side === "buy" ? "Buy" : "Sell"} ${selected.leg2.qty}×`}
+            leg={selected.leg2.detail}
+          />
         </div>
       )}
     </div>
